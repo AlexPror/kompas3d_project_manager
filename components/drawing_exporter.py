@@ -89,7 +89,8 @@ class DrawingExporter(BaseKompasComponent):
             self.logger.info(f"ЭКСПОРТ ЧЕРТЕЖА: {Path(drawing_path).name}")
             self.logger.info("=" * 40)
             
-            if not self.connect_to_kompas():
+            # Принудительное переподключение для стабильности
+            if not self.connect_to_kompas(force_reconnect=True):
                 result['error'] = "Не удалось подключиться к КОМПАС-3D"
                 return result
             

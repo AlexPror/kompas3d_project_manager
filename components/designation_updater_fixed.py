@@ -50,9 +50,14 @@ class DesignationUpdaterFixed(BaseKompasComponent):
             self.logger.info("=" * 50)
             self.logger.info(f"H={H}, B1={B1}, L1={L1}")
             
-            if not self.connect_to_kompas():
+            # Принудительное переподключение для стабильности
+            if not self.connect_to_kompas(force_reconnect=True):
                 result['error'] = "Не удалось подключиться к КОМПАС-3D"
                 return result
+            
+            # Закрываем все открытые документы
+            self.close_all_documents()
+            time.sleep(0.5)
             
             project_path_obj = Path(project_path)
             

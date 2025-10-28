@@ -49,9 +49,15 @@ class CascadingVariablesUpdater(BaseKompasComponent):
             self.logger.info("="*60)
             self.logger.info(f"H={h}, B1={b1}, L1={l1}\n")
             
-            if not self.connect_to_kompas():
+            # Принудительное переподключение для обеспечения стабильности
+            if not self.connect_to_kompas(force_reconnect=True):
                 result['errors'].append("Не удалось подключиться к КОМПАС-3D")
                 return result
+            
+            # Закрываем все открытые документы перед началом
+            self.logger.info("Закрытие всех открытых документов...")
+            self.close_all_documents()
+            time.sleep(1)
             
             project_path_obj = Path(project_path)
             assembly_file = list(project_path_obj.glob("*.a3d"))[0]

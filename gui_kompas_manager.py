@@ -21,6 +21,8 @@ from components.dxf_renamer import DxfRenamer
 from components.drawing_auto_updater import DrawingAutoUpdater
 from components.drawing_exporter import DrawingExporter
 from components.unfolding_dxf_exporter import UnfoldingDxfExporter
+from components.bmp_organizer import BmpOrganizer
+from components.template_manager import TemplateManager
 
 # Конфигурация кодировки
 sys.stdout.reconfigure(encoding='utf-8')
@@ -69,6 +71,8 @@ class KompasManagerGUI(ctk.CTk):
         self.dxf_renamer = DxfRenamer()
         self.drawing_updater = DrawingAutoUpdater()
         self.drawing_exporter = DrawingExporter()
+        self.bmp_organizer = BmpOrganizer()
+        self.template_manager = TemplateManager()
         
         # Настройка логирования
         self.setup_logging()
@@ -357,7 +361,7 @@ class KompasManagerGUI(ctk.CTk):
         # Большая кнопка "Всё сразу"
         all_btn = ctk.CTkButton(
             section,
-            text="🚀 ПОЛНЫЙ ЦИКЛ (8 шагов): Копирование → Переменные → Обозначения → \nЭкспорт DXF → Переименование DXF → Чертежи → BMP → Готово!",
+            text="🚀 ПОЛНЫЙ ЦИКЛ (9 шагов): Копирование → Переменные → Обозначения → \nЭкспорт DXF → Переименование DXF → Чертежи → BMP → Организация → Готово!",
             command=self.do_everything,
             height=60,
             font=ctk.CTkFont(size=13, weight="bold"),
@@ -378,13 +382,15 @@ class KompasManagerGUI(ctk.CTk):
         )
         info_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
-        rename_btn = ctk.CTkButton(
+        template_btn = ctk.CTkButton(
             buttons_frame,
-            text="✏️ Переименовать сборку",
-            command=self.rename_assembly,
-            height=35
+            text="💾 Сохранить как шаблон",
+            command=self.save_as_template,
+            height=35,
+            fg_color="#9B59B6",
+            hover_color="#7D3C98"
         )
-        rename_btn.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        template_btn.pack(side="left", fill="x", expand=True, padx=(5, 0))
     
     # =========================
     # ОБРАБОТЧИКИ СОБЫТИЙ
@@ -534,7 +540,7 @@ class KompasManagerGUI(ctk.CTk):
                 self.logger.info("")
                 
                 # Шаг 1: Копирование
-                self.logger.info("ШАГ 1/7: Копирование проекта...")
+                self.logger.info("ШАГ 1/9: Копирование проекта...")
                 result1 = self.copier.copy_project(source, target, project_name)
                 
                 if not result1['success']:
@@ -546,7 +552,7 @@ class KompasManagerGUI(ctk.CTk):
                 time.sleep(1)
                 
                 # Шаг 2: Обновление переменных
-                self.logger.info("ШАГ 2/7: Обновление переменных...")
+                self.logger.info("ШАГ 2/9: Обновление переменных...")
                 result2 = self.updater.update_project_variables(self.current_project_path, h, b1, l1)
                 
                 if not result2['success']:
@@ -557,7 +563,7 @@ class KompasManagerGUI(ctk.CTk):
                 time.sleep(1)
                 
                 # Шаг 3: Обновление обозначений (marking) + переименование файлов
-                self.logger.info("ШАГ 3/7: Обновление обозначений и переименование...")
+                self.logger.info("ШАГ 3/9: Обновление обозначений и переименование...")
                 result3 = self.designation_updater.update_all_designations(
                     self.current_project_path, h, b1, l1, order_number
                 )
@@ -571,7 +577,7 @@ class KompasManagerGUI(ctk.CTk):
                 time.sleep(1)
                 
                 # Шаг 4: Экспорт разверток в DXF
-                self.logger.info("ШАГ 4/8: Экспорт разверток в DXF...")
+                self.logger.info("ШАГ 4/9: Экспорт разверток в DXF...")
                 
                 from pathlib import Path
                 dxf_folder = Path(self.current_project_path) / "DXF"
@@ -590,7 +596,7 @@ class KompasManagerGUI(ctk.CTk):
                 time.sleep(1)
                 
                 # Шаг 5: Переименование DXF
-                self.logger.info("ШАГ 5/8: Переименование DXF файлов...")
+                self.logger.info("ШАГ 5/9: Переименование DXF файлов...")
                 result5 = self.dxf_renamer.rename_dxf_files(self.current_project_path, order_number)
                 
                 if result5['success']:
@@ -601,7 +607,7 @@ class KompasManagerGUI(ctk.CTk):
                 time.sleep(1)
                 
                 # Шаг 6: Обновление чертежей
-                self.logger.info("ШАГ 6/8: Обновление чертежей...")
+                self.logger.info("ШАГ 6/9: Обновление чертежей...")
                 result6 = self.drawing_updater.update_all_drawings(self.current_project_path)
                 
                 if result6['success']:
@@ -612,7 +618,7 @@ class KompasManagerGUI(ctk.CTk):
                 time.sleep(1)
                 
                 # Шаг 7: Экспорт чертежей в BMP
-                self.logger.info("ШАГ 7/8: Экспорт чертежей в BMP...")
+                self.logger.info("ШАГ 7/9: Экспорт чертежей в BMP...")
                 
                 # Находим чертежи (исключая развертки)
                 drawing_files = self.drawing_exporter.find_drawing_files(
@@ -646,11 +652,23 @@ class KompasManagerGUI(ctk.CTk):
                     self.logger.info(f"✅ Экспортировано BMP: {exported_count}/{len(drawing_files)}\n")
                 else:
                     self.logger.info("  Чертежей для экспорта не найдено\n")
+                    exported_count = 0
                 
                 time.sleep(1)
                 
-                # Шаг 8: Итоговая информация
-                self.logger.info("ШАГ 8/8: Формирование итогового отчета...")
+                # Шаг 8: Организация BMP файлов
+                self.logger.info("ШАГ 8/9: Организация BMP файлов...")
+                result8 = self.bmp_organizer.organize_bmp_files(self.current_project_path)
+                
+                if result8['success'] and result8['moved_count'] > 0:
+                    self.logger.info(f"✅ BMP файлы организованы: {result8['moved_count']} → папка BMP/\n")
+                else:
+                    self.logger.info(f"  Нет BMP файлов для организации\n")
+                
+                time.sleep(1)
+                
+                # Шаг 9: Итоговая информация
+                self.logger.info("ШАГ 9/9: Формирование итогового отчета...")
                 
                 # Итоговое сообщение
                 self.logger.info("\n" + "="*60)
@@ -699,6 +717,58 @@ class KompasManagerGUI(ctk.CTk):
         self.logger.info(f"📄 Других файлов: {len(info['other_files'])}")
         self.logger.info(f"📊 Всего файлов: {info['total_files']}")
         self.logger.info("="*60 + "\n")
+    
+    def save_as_template(self):
+        """Сохранить текущий проект как шаблон"""
+        project_path = self.current_project_path or self.source_entry.get().strip()
+        
+        if not project_path:
+            self.logger.error("❌ Укажите путь к проекту!")
+            return
+        
+        # Диалог для ввода информации о шаблоне
+        dialog = ctk.CTkInputDialog(
+            text="Введите название шаблона:",
+            title="Сохранить как шаблон"
+        )
+        template_name = dialog.get_input()
+        
+        if not template_name:
+            self.logger.info("Отмена создания шаблона")
+            return
+        
+        # Получаем параметры, если введены
+        parameters = {}
+        try:
+            if self.h_entry.get().strip():
+                parameters['H'] = int(self.h_entry.get().strip())
+            if self.b1_entry.get().strip():
+                parameters['B1'] = int(self.b1_entry.get().strip())
+            if self.l1_entry.get().strip():
+                parameters['L1'] = int(self.l1_entry.get().strip())
+        except:
+            pass
+        
+        # Описание
+        description = f"Шаблон создан из проекта {Path(project_path).name}"
+        
+        # Создаем шаблон
+        self.logger.info(f"\n💾 Создание шаблона '{template_name}'...")
+        
+        result = self.template_manager.add_template_from_project(
+            project_path=project_path,
+            template_name=template_name,
+            description=description,
+            parameters=parameters,
+            tags=['ZVD', 'LITE']
+        )
+        
+        if result['success']:
+            self.logger.info(f"✅ Шаблон '{template_name}' создан успешно!")
+            self.logger.info(f"   ID: {result['template_id']}")
+            self.logger.info(f"   Всего шаблонов: {len(self.template_manager.list_templates())}\n")
+        else:
+            self.logger.error(f"❌ Ошибка создания шаблона: {result['error']}\n")
     
     def clear_log(self):
         """Очистить лог"""

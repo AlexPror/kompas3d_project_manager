@@ -49,7 +49,8 @@ class UnfoldingDxfExporter(BaseKompasComponent):
             self.logger.info(f"Экспорт в DXF: {drawing_file.name}")
             self.logger.info(f"Выходной файл: {output_file.name}")
             
-            if not self.connect_to_kompas():
+            # Принудительное переподключение для стабильности
+            if not self.connect_to_kompas(force_reconnect=True):
                 result['error'] = "Не удалось подключиться к КОМПАС-3D"
                 return result
             

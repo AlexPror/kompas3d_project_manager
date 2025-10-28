@@ -18,19 +18,50 @@ class BaseKompasComponent:
         self.application = None
         self.connected = False
     
-    def connect_to_kompas(self) -> bool:
-        """Подключение к КОМПАС-3D"""
+    def connect_to_kompas(self, force_reconnect: bool = False) -> bool:
+        """Подключение к КОМПАС-3D
+        
+        Args:
+            force_reconnect: Принудительное переподключение даже если уже подключен
+        """
         try:
-            if self.connected:
-                return True
+            # Если требуется переподключение или еще не подключались
+            if force_reconnect or not self.connected:
+                # Инициализируем COM (безопасно вызывать повторно)
+                try:
+                    pythoncom.CoInitialize()
+                except:
+                    pass  # Уже инициализирован
                 
-            pythoncom.CoInitialize()
-            self.logger.info("Подключение к КОМПАС-3D v7...")
-            self.application = Dispatch("Kompas.Application.7")
-            self.application.Visible = True
-            self.logger.info("Подключение к КОМПАС-3D успешно")
-            self.connected = True
+                self.logger.info("Подключение к КОМПАС-3D v7...")
+                
+                # Пытаемся получить уже запущенный экземпляр
+                try:
+                    self.application = Dispatch("Kompas.Application.7")
+                except:
+                    # Если не получилось, создаем новый
+                    from win32com.client import DispatchEx
+                    self.application = DispatchEx("Kompas.Application.7")
+                
+                self.application.Visible = True
+                self.logger.info("Подключение к КОМПАС-3D успешно")
+                self.connected = True
+                return True
+            
+            # Если уже подключены, проверяем что соединение живое
+            if self.connected and self.application:
+                try:
+                    # Проверка - пытаемся получить доступ к объекту
+                    _ = self.application.Visible
+                    return True
+                except:
+                    # Соединение потеряно, переподключаемся
+                    self.logger.warning("Соединение с КОМПАС-3D потеряно, переподключение...")
+                    self.connected = False
+                    return self.connect_to_kompas(force_reconnect=True)
+            
             return True
+            
         except Exception as e:
             self.logger.error(f"Ошибка подключения к КОМПАС-3D: {e}")
             self.connected = False
