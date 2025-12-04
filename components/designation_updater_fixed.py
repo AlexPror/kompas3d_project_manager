@@ -18,7 +18,7 @@ class DesignationUpdaterFixed(BaseKompasComponent):
     def __init__(self):
         super().__init__()
     
-    def update_all_designations(self, project_path: str, H: int, B1: int, L1: int, order_number: str = None) -> Dict:
+    def update_all_designations(self, project_path: str, H: int, B1: int, L1: int, order_number: str = None, project_type: str = None) -> Dict:
         """
         Обновление ВСЕХ обозначений (сборка + детали) с правильной логикой
         
@@ -32,6 +32,8 @@ class DesignationUpdaterFixed(BaseKompasComponent):
             H: Высота
             B1: Ширина
             L1: Длина
+            order_number: Номер заказа
+            project_type: Тип проекта (ZVD.LITE или ZVD.TURBO). Если None - определяется по папке.
             
         Returns:
             Dict с результатами
@@ -61,9 +63,25 @@ class DesignationUpdaterFixed(BaseKompasComponent):
             
             project_path_obj = Path(project_path)
             
+            # Определяем тип проекта
+            project_folder_name = project_path_obj.name
+            project_prefix = "ZVD.LITE"  # По умолчанию
+            
+            if project_type:
+                # Если передан явно - используем его
+                project_prefix = project_type
+            else:
+                # Иначе пытаемся определить из имени папки
+                if "TURBO" in project_folder_name.upper():
+                    project_prefix = "ZVD.TURBO"
+                elif "LITE" in project_folder_name.upper():
+                    project_prefix = "ZVD.LITE"
+            
+            self.logger.info(f"Определен тип проекта: {project_prefix}")
+            
             # Формируем обозначения
-            full_name = f"ZVD.LITE.{H}.{B1}.{L1}"
-            short_name = f"ZVD.LITE.{H}.{B1}"
+            full_name = f"{project_prefix}.{H}.{B1}.{L1} СБ"  # Сборка всегда с СБ
+            short_name = f"{project_prefix}.{H}.{B1}"
             
             # Получаем API
             api5_obj = Dispatch("Kompas.Application.5")
@@ -81,8 +99,8 @@ class DesignationUpdaterFixed(BaseKompasComponent):
             assembly_file = assembly_files[0]
             self.logger.info(f"Файл сборки: {assembly_file.name}")
             
-            # Переименовываем файл ПЕРЕД открытием
-            new_assembly_name = f"{full_name}.a3d"
+            # Переименовываем файл ПЕРЕД открытием (с СБ в названии)
+            new_assembly_name = f"{project_prefix}.{H}.{B1}.{L1} СБ.a3d"
             new_assembly_path = project_path_obj / new_assembly_name
             
             if assembly_file.name != new_assembly_name:
@@ -216,11 +234,10 @@ class DesignationUpdaterFixed(BaseKompasComponent):
                             # Получаем номер для этого имени
                             part_id = f"{name_to_number[p_name]:03d}"
                             
-                            # СПЕЦИАЛЬНАЯ ОБРАБОТКА для теплообменника
-                            if "теплообменник" in p_name.lower():
-                                # Для теплообменника не меняем базовое обозначение
-                                # Только обновляем длину если нужно
-                                new_mark = old_mark  # Оставляем как есть пока
+                            # СПЕЦИАЛЬНАЯ ОБРАБОТКА для покупных компонентов
+                            if any(word in p_name.lower() for word in ["теплообменник", "вентилятор", "блок электропитания", "блок питания"]):
+                                # Для покупных компонентов не меняем базовое обозначение
+                                new_mark = old_mark  # Оставляем как есть
                             elif "короба" in p_name.lower():
                                 new_mark = f"{full_name}.{part_id}"
                             else:
@@ -266,7 +283,32 @@ class DesignationUpdaterFixed(BaseKompasComponent):
             
             # ШАГ 3: ОБНОВЛЕНИЕ MARKING В ФАЙЛАХ ДЕТАЛЕЙ И ПЕРЕИМЕНОВАНИЕ ФАЙЛОВ
             self.logger.info("\n--- ОБНОВЛЕНИЕ MARKING В ФАЙЛАХ ДЕТАЛЕЙ ---")
-            self.logger.info(f"Найдено соответствий файл->marking: {len(file_to_marking)}")
+            self.logger.info(f"Найдено соответствий файл->marking из сборки: {len(file_to_marking)}")
+            
+            # ВАЖНО: Также обрабатываем ВСЕ .m3d файлы в папке (даже если не в сборке)
+            all_part_files = list(project_path_obj.glob("*.m3d"))
+            self.logger.info(f"Всего .m3d файлов в папке: {len(all_part_files)}")
+            
+            # Добавляем файлы, которых нет в file_to_marking
+            for part_file in all_part_files:
+                if part_file.name not in file_to_marking:
+                    # Пытаемся определить номер из имени файла
+                    file_stem = part_file.stem
+                    if " - " in file_stem:
+                        parts = file_stem.split(" - ", 1)
+                        part_number = parts[0].strip()
+                        part_desc = parts[1].strip()
+                    else:
+                        part_number = "999"  # Неизвестный номер
+                        part_desc = file_stem
+                    
+                    # Формируем marking (без L1 для обычных деталей)
+                    new_marking = f"{short_name}.{part_number}"
+                    
+                    self.logger.info(f"  ⚠️ Деталь не в сборке: {part_file.name} → {new_marking}")
+                    file_to_marking[part_file.name] = (new_marking, part_desc, part_number)
+            
+            self.logger.info(f"Всего файлов для обработки: {len(file_to_marking)}")
             
             renamed_count = 0
             files_to_rename = []  # [(старый_путь, новый_путь, marking)]
@@ -292,8 +334,9 @@ class DesignationUpdaterFixed(BaseKompasComponent):
                     
                     old_marking = iPart.marking
                     
-                    # Для теплообменника - специальная обработка
+                    # СПЕЦИАЛЬНАЯ ОБРАБОТКА для покупных компонентов
                     if "теплообменник" in filename.lower():
+                        # Для теплообменника обновляем длину (L1-300)
                         heat_length = L1 - 300
                         old_parts = old_marking.split()
                         if len(old_parts) >= 2 and '.' in old_parts[0]:
@@ -306,6 +349,10 @@ class DesignationUpdaterFixed(BaseKompasComponent):
                         else:
                             new_marking = old_marking
                         self.logger.info(f"    Теплообменник: '{old_marking}' → '{new_marking}'")
+                    elif any(word in filename.lower() for word in ["вентилятор", "блок электропитания", "блок питания"]):
+                        # Для вентилятора и блока питания - не меняем обозначение
+                        new_marking = old_marking
+                        self.logger.info(f"    Покупной компонент (не изменяется): '{old_marking}'")
                     else:
                         # Обычная деталь - используем marking из сборки
                         new_marking = marking
@@ -380,46 +427,62 @@ class DesignationUpdaterFixed(BaseKompasComponent):
                 except Exception as e:
                     self.logger.warning(f"    ⚠ Ошибка переименования: {e}")
             
-            # ШАГ 4: ПЕРЕИМЕНОВАНИЕ СБОРОЧНОГО ЧЕРТЕЖА
-            self.logger.info("\n--- ПЕРЕИМЕНОВАНИЕ СБОРОЧНОГО ЧЕРТЕЖА ---")
+            # ШАГ 4: ПЕРЕИМЕНОВАНИЕ ЧЕРТЕЖЕЙ
+            self.logger.info("\n--- ПЕРЕИМЕНОВАНИЕ ЧЕРТЕЖЕЙ ---")
             
-            # Ищем сборочный чертеж (с "Конвектор" в названии)
-            assembly_drawings = [
-                f for f in project_path_obj.glob("*.cdw")
-                if "конвектор" in f.name.lower() or "сборочный" in f.name.lower()
-            ]
+            # Обрабатываем ВСЕ чертежи в папке
+            all_drawings = list(project_path_obj.glob("*.cdw"))
+            self.logger.info(f"Найдено чертежей: {len(all_drawings)}")
             
             drawings_renamed = 0
             
-            for asm_drw in assembly_drawings:
+            for drw_file in all_drawings:
                 try:
-                    old_name = asm_drw.name
+                    old_name = drw_file.name
                     
-                    # Формируем новое имя (заменяем старые параметры на новые)
-                    # Было: "ZVD.LITE.90.260.1000 - Конвектор..."
-                    # Станет: "ZVD.LITE.126.160.1400 - Конвектор..."
+                    # Определяем, сборочный это чертеж или чертеж детали
+                    is_assembly_drawing = any(word in old_name.lower() for word in ["конвектор", "сборочный", "сборка"])
                     
-                    # Извлекаем часть после " - " (название без параметров)
-                    if " - " in old_name:
-                        name_parts = old_name.split(" - ", 1)
-                        description = name_parts[1]  # "Конвектор с естественной конвекцией.cdw"
-                        new_drawing_name = f"{full_name} - {description}"
+                    if is_assembly_drawing:
+                        # Сборочный чертеж - используем full_name (с L1)
+                        if " - " in old_name:
+                            name_parts = old_name.split(" - ", 1)
+                            description = name_parts[1]
+                            new_drawing_name = f"{full_name} - {description}"
+                        else:
+                            new_drawing_name = f"{full_name} - {old_name}"
                     else:
-                        # Если нет " - ", просто добавляем параметры в начало
-                        new_drawing_name = f"{full_name} - {old_name}"
+                        # Чертеж детали - используем short_name (без L1)
+                        # Пытаемся извлечь номер детали из имени файла
+                        file_stem = drw_file.stem
+                        if " - " in file_stem:
+                            parts = file_stem.split(" - ", 1)
+                            part_number = parts[0].strip()
+                            description = parts[1].strip()
+                            
+                            # Формируем новое имя: номер - описание
+                            new_drawing_name = f"{part_number} - {description}.cdw"
+                        else:
+                            # Если формат неизвестен, просто обновляем префикс
+                            new_drawing_name = old_name
                     
-                    new_drawing_path = asm_drw.parent / new_drawing_name
+                    new_drawing_path = drw_file.parent / new_drawing_name
                     
-                    if asm_drw != new_drawing_path:
+                    if drw_file != new_drawing_path:
                         self.logger.info(f"Чертеж: '{old_name}'")
                         self.logger.info(f"      → '{new_drawing_name}'")
                         
-                        asm_drw.rename(new_drawing_path)
+                        # Проверяем, существует ли целевой файл
+                        if new_drawing_path.exists():
+                            self.logger.warning(f"      ⚠️ Файл уже существует, удаляем")
+                            new_drawing_path.unlink()
+                        
+                        drw_file.rename(new_drawing_path)
                         drawings_renamed += 1
-                        self.logger.info(f"✓ Чертеж переименован")
+                        self.logger.info(f"      ✓ Чертеж переименован")
                 
                 except Exception as e:
-                    self.logger.warning(f"Ошибка переименования чертежа {asm_drw.name}: {e}")
+                    self.logger.warning(f"      ⚠️ Ошибка переименования чертежа {drw_file.name}: {e}")
             
             result['drawings_renamed'] = drawings_renamed
             result['success'] = result['assembly_renamed'] or renamed_count > 0 or drawings_renamed > 0

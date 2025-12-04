@@ -289,3 +289,4 @@ python gui_kompas_manager.py
 **Дата создания**: 27.10.2025
 **Автор**: AI Assistant
 
+

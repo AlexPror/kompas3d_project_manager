@@ -24,6 +24,7 @@ from components.drawing_exporter import DrawingExporter
 from components.unfolding_dxf_exporter import UnfoldingDxfExporter
 from components.bmp_organizer import BmpOrganizer
 from components.template_manager import TemplateManager
+from components.pdf_generator import PdfGenerator
 
 # Сохраняем ссылки на модули для перезагрузки
 from components import (
@@ -36,6 +37,7 @@ from components import (
     unfolding_dxf_exporter,
     bmp_organizer,
     template_manager,
+    pdf_generator,
     base_component
 )
 
@@ -88,6 +90,7 @@ class KompasManagerGUI(ctk.CTk):
         self.drawing_exporter = DrawingExporter()
         self.bmp_organizer = BmpOrganizer()
         self.template_manager = TemplateManager()
+        self.pdf_generator = PdfGenerator()
         
         # Настройка логирования
         self.setup_logging()
@@ -168,34 +171,39 @@ class KompasManagerGUI(ctk.CTk):
         main_container = ctk.CTkFrame(self, fg_color="transparent")
         main_container.pack(fill="both", expand=True, padx=20, pady=20)
         
-        # Левая панель (формы)
-        left_panel = ctk.CTkFrame(main_container)
-        left_panel.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        # Левая панель (формы) - фиксированная ширина
+        left_panel = ctk.CTkFrame(main_container, width=600)
+        left_panel.pack(side="left", fill="both", expand=False, padx=(0, 10))
+        left_panel.pack_propagate(False)  # Не изменять размер по содержимому
         
-        # Правая панель (логи)
+        # Правая панель (логи) - занимает оставшееся место
         right_panel = ctk.CTkFrame(main_container)
         right_panel.pack(side="right", fill="both", expand=True, padx=(10, 0))
         
         # =========================
-        # ЛЕВАЯ ПАНЕЛЬ: ФОРМЫ
+        # ЛЕВАЯ ПАНЕЛЬ: ФОРМЫ (SCROLLABLE)
         # =========================
+        
+        # Создаем scrollable frame для всего содержимого
+        scroll_frame = ctk.CTkScrollableFrame(left_panel, fg_color="transparent")
+        scroll_frame.pack(fill="both", expand=True, padx=0, pady=0)
         
         # Заголовок
         title = ctk.CTkLabel(
-            left_panel,
+            scroll_frame,
             text="🔧 Менеджер проектов КОМПАС-3D",
             font=ctk.CTkFont(size=24, weight="bold")
         )
         title.pack(pady=(10, 20))
         
         # СЕКЦИЯ 1: Копирование проекта
-        self.create_copy_section(left_panel)
+        self.create_copy_section(scroll_frame)
         
         # СЕКЦИЯ 2: Переменные
-        self.create_variables_section(left_panel)
+        self.create_variables_section(scroll_frame)
         
         # СЕКЦИЯ 3: Быстрые действия
-        self.create_quick_actions_section(left_panel)
+        self.create_quick_actions_section(scroll_frame)
         
         # Прогресс-бар
         self.progress_bar = ctk.CTkProgressBar(left_panel, mode="indeterminate")
@@ -221,7 +229,9 @@ class KompasManagerGUI(ctk.CTk):
             wrap="word"
         )
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        self.log_text.configure(state='disabled')
+        
+        # Разрешаем выделение и копирование, но запрещаем редактирование
+        self.log_text.bind("<Key>", lambda e: "break" if not (e.state == 4 and e.keysym.lower() == 'c') else None)
         
         # Настройка GUI логирования
         self.setup_gui_logging(self.log_text)
@@ -372,57 +382,113 @@ class KompasManagerGUI(ctk.CTk):
         # Заголовок секции
         section_title = ctk.CTkLabel(
             section,
-            text="🔧 Обновление переменных",
+            text="🔧 Обновление переменных и штампов",
             font=ctk.CTkFont(size=16, weight="bold")
         )
         section_title.pack(pady=(15, 10), padx=15, anchor="w")
         
-        # Переменные в одной строке
+        # --- ГЕОМЕТРИЯ ---
         vars_frame = ctk.CTkFrame(section, fg_color="transparent")
         vars_frame.pack(fill="x", padx=15, pady=5)
         
-        # H
-        h_frame = ctk.CTkFrame(vars_frame, fg_color="transparent")
-        h_frame.pack(side="left", fill="x", expand=True, padx=5)
-        ctk.CTkLabel(h_frame, text="H (высота): *", anchor="w").pack()
-        self.h_entry = ctk.CTkEntry(h_frame, placeholder_text="например: 160", justify="center")
-        self.h_entry.pack(fill="x")
-        self.h_entry.bind("<KeyRelease>", lambda e: self.update_project_name_from_variables())
-        self.h_entry.bind("<FocusOut>", lambda e: self.update_project_name_from_variables())
+        # Helper для создания поля с кнопкой вставки
+        def create_field(parent_frame, label, entry_attr_name, placeholder, width=None):
+            frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
+            frame.pack(side="left", fill="x", expand=True, padx=5)
+            
+            ctk.CTkLabel(frame, text=label, anchor="w").pack(fill="x")
+            
+            input_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            input_frame.pack(fill="x")
+            
+            entry = ctk.CTkEntry(input_frame, placeholder_text=placeholder, justify="center")
+            entry.pack(side="left", fill="x", expand=True)
+            setattr(self, entry_attr_name, entry)
+            
+            paste_btn = ctk.CTkButton(
+                input_frame, 
+                text="📋", 
+                width=30, 
+                command=lambda e=entry: self.paste_from_clipboard(e)
+            )
+            paste_btn.pack(side="left", padx=(5, 0))
+            return entry
+
+        # H, B1, L1
+        h_entry = create_field(vars_frame, "H (высота): *", "h_entry", "160")
+        h_entry.bind("<KeyRelease>", lambda e: self.update_project_name_from_variables())
         
-        # B1
-        b1_frame = ctk.CTkFrame(vars_frame, fg_color="transparent")
-        b1_frame.pack(side="left", fill="x", expand=True, padx=5)
-        ctk.CTkLabel(b1_frame, text="B1 (ширина): *", anchor="w").pack()
-        self.b1_entry = ctk.CTkEntry(b1_frame, placeholder_text="например: 350", justify="center")
-        self.b1_entry.pack(fill="x")
-        self.b1_entry.bind("<KeyRelease>", lambda e: self.update_project_name_from_variables())
-        self.b1_entry.bind("<FocusOut>", lambda e: self.update_project_name_from_variables())
+        b1_entry = create_field(vars_frame, "B1 (ширина): *", "b1_entry", "350")
+        b1_entry.bind("<KeyRelease>", lambda e: self.update_project_name_from_variables())
         
-        # L1
-        l1_frame = ctk.CTkFrame(vars_frame, fg_color="transparent")
-        l1_frame.pack(side="left", fill="x", expand=True, padx=5)
-        ctk.CTkLabel(l1_frame, text="L1 (длина): *", anchor="w").pack()
-        self.l1_entry = ctk.CTkEntry(l1_frame, placeholder_text="например: 2600", justify="center")
-        self.l1_entry.pack(fill="x")
-        self.l1_entry.bind("<KeyRelease>", lambda e: self.update_project_name_from_variables())
-        self.l1_entry.bind("<FocusOut>", lambda e: self.update_project_name_from_variables())
+        l1_entry = create_field(vars_frame, "L1 (длина): *", "l1_entry", "2600")
+        l1_entry.bind("<KeyRelease>", lambda e: self.update_project_name_from_variables())
         
-        # Номер заказа
-        order_frame = ctk.CTkFrame(section, fg_color="transparent")
-        order_frame.pack(fill="x", padx=15, pady=(10, 5))
+        # --- ДАННЫЕ ПРОЕКТА ---
+        row2_frame = ctk.CTkFrame(section, fg_color="transparent")
+        row2_frame.pack(fill="x", padx=15, pady=5)
         
-        ctk.CTkLabel(order_frame, text="Номер заказа (опционально):", width=200, anchor="w").pack(side="left")
-        self.order_entry = ctk.CTkEntry(order_frame, placeholder_text="А-180925-1801")
-        self.order_entry.pack(side="left", fill="x", expand=True, padx=5)
+        create_field(row2_frame, "Номер заказа:", "order_entry", "А-180925-1801")
+        create_field(row2_frame, "Разработчик:", "developer_entry", "Иванов И.И.")
         
-        # Разработчик
-        developer_frame = ctk.CTkFrame(section, fg_color="transparent")
-        developer_frame.pack(fill="x", padx=15, pady=(5, 5))
+        # --- ДАННЫЕ ШТАМПА (НОВЫЕ) ---
+        row3_frame = ctk.CTkFrame(section, fg_color="transparent")
+        row3_frame.pack(fill="x", padx=15, pady=5)
         
-        ctk.CTkLabel(developer_frame, text="Разработчик (опционально):", width=200, anchor="w").pack(side="left")
-        self.developer_entry = ctk.CTkEntry(developer_frame, placeholder_text="Иванов И.И.")
-        self.developer_entry.pack(side="left", fill="x", expand=True, padx=5)
+        create_field(row3_frame, "Проверил:", "checker_entry", "Петров П.П.")
+        create_field(row3_frame, "Организация:", "organization_entry", "ООО \"ЗВД\"")
+        
+        row4_frame = ctk.CTkFrame(section, fg_color="transparent")
+        row4_frame.pack(fill="x", padx=15, pady=5)
+        
+        create_field(row4_frame, "Т. контр.:", "tech_control_entry", "Сидоров С.С.")
+        create_field(row4_frame, "Н. контр.:", "norm_control_entry", "Кузнецов К.К.")
+        
+        row5_frame = ctk.CTkFrame(section, fg_color="transparent")
+        row5_frame.pack(fill="x", padx=15, pady=5)
+        
+        create_field(row5_frame, "Утв.:", "approved_entry", "Начальников Н.Н.")
+        
+        # Поле даты с автозаполнением (создаем вручную, чтобы вставить значение)
+        date_frame = ctk.CTkFrame(row5_frame, fg_color="transparent")
+        date_frame.pack(side="left", fill="x", expand=True, padx=5)
+        
+        ctk.CTkLabel(date_frame, text="Дата:", anchor="w").pack(fill="x")
+        
+        input_frame = ctk.CTkFrame(date_frame, fg_color="transparent")
+        input_frame.pack(fill="x")
+        
+        self.date_entry = ctk.CTkEntry(input_frame, justify="center")
+        self.date_entry.pack(side="left", fill="x", expand=True)
+        # Вставляем текущую дату
+        current_date = datetime.now().strftime("%d.%m.%y")
+        self.date_entry.insert(0, current_date)
+        
+        paste_btn = ctk.CTkButton(
+            input_frame, 
+            text="📋", 
+            width=30, 
+            command=lambda: self.paste_from_clipboard(self.date_entry)
+        )
+        paste_btn.pack(side="left", padx=(5, 0))
+        
+        row6_frame = ctk.CTkFrame(section, fg_color="transparent")
+        row6_frame.pack(fill="x", padx=15, pady=5)
+        
+        # Материал - ComboBox
+        ctk.CTkLabel(row6_frame, text="Материал (для деталей):", anchor="w").pack(fill="x")
+        
+        self.material_combo = ctk.CTkComboBox(
+            row6_frame,
+            values=[
+                "Сталь 08Х18Н10 (AISI 304)\nлист 1,0 мм, ГОСТ 5632",
+                "Сталь оцинкованная 1,0\nГОСТ 14918‑80"
+            ],
+            width=400,
+            justify="left"
+        )
+        self.material_combo.set("Сталь 08Х18Н10 (AISI 304)\nлист 1,0 мм, ГОСТ 5632") # Default
+        self.material_combo.pack(fill="x", pady=(5, 0))
         
         # Кнопки обновления
         buttons_frame = ctk.CTkFrame(section, fg_color="transparent")
@@ -431,20 +497,20 @@ class KompasManagerGUI(ctk.CTk):
         # Кнопка обновления переменных
         update_vars_btn = ctk.CTkButton(
             buttons_frame,
-            text="🔧 Обновить переменные",
+            text="🔧 Обновить переменные (H, B1, L1)",
             command=self.update_variables,
             height=40,
-            font=ctk.CTkFont(size=14, weight="bold")
+            font=ctk.CTkFont(size=13, weight="bold")
         )
         update_vars_btn.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
         # Кнопка обновления обозначений
         update_designations_btn = ctk.CTkButton(
             buttons_frame,
-            text="📝 Обновить обозначения (LITE/TURBO)",
+            text="📝 Обновить обозначения",
             command=self.update_designations_only,
             height=40,
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#E67E22",
             hover_color="#D35400"
         )
@@ -456,10 +522,10 @@ class KompasManagerGUI(ctk.CTk):
         
         update_stamps_btn = ctk.CTkButton(
             buttons_frame2,
-            text="📋 Обновить штампы чертежей (Разработчик)",
+            text="📋 Обновить данные штампа (Разраб, Пров, Орг, Мат)",
             command=self.update_drawing_stamps,
             height=40,
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#16A085",
             hover_color="#138D75"
         )
@@ -469,41 +535,7 @@ class KompasManagerGUI(ctk.CTk):
         hint_frame = ctk.CTkFrame(section, fg_color="transparent")
         hint_frame.pack(fill="x", padx=15, pady=(5, 5))
         
-        hint1 = ctk.CTkLabel(
-            hint_frame,
-            text="💡 Для обновления существующего проекта:",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#E67E22",
-            anchor="w"
-        )
-        hint1.pack(anchor="w")
-        
-        hint2 = ctk.CTkLabel(
-            hint_frame,
-            text="   1. Укажите путь к проекту в поле 'Исходный проект' ☝",
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-            anchor="w"
-        )
-        hint2.pack(anchor="w")
-        
-        hint3 = ctk.CTkLabel(
-            hint_frame,
-            text="   2. Измените тип проекта (LITE/TURBO) и параметры H, B1, L1",
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-            anchor="w"
-        )
-        hint3.pack(anchor="w")
-        
-        hint4 = ctk.CTkLabel(
-            hint_frame,
-            text="   3. Нажмите '📝 Обновить обозначения' →",
-            font=ctk.CTkFont(size=10),
-            text_color="gray",
-            anchor="w"
-        )
-        hint4.pack(anchor="w", pady=(0, 10))
+        ctk.CTkLabel(hint_frame, text="💡 Подсказка: Заполните поля и нажмите соответствующую кнопку обновления.", font=ctk.CTkFont(size=10), text_color="gray").pack(anchor="w")
     
     def create_quick_actions_section(self, parent):
         """Секция быстрых действий"""
@@ -529,6 +561,30 @@ class KompasManagerGUI(ctk.CTk):
             hover_color="#1F5808"
         )
         all_btn.pack(fill="x", padx=15, pady=(0, 10))
+        
+        # Кнопка пересоздания DXF/BMP
+        recreate_btn = ctk.CTkButton(
+            section,
+            text="🔄 Пересоздать DXF и BMP (для текущего проекта)",
+            command=self.recreate_dxf_bmp,
+            height=40,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#D35400",
+            hover_color="#A04000"
+        )
+        recreate_btn.pack(fill="x", padx=15, pady=(0, 10))
+        
+        # Кнопка объединения BMP в PDF
+        pdf_btn = ctk.CTkButton(
+            section,
+            text="📄 Объединить BMP в PDF",
+            command=self.combine_bmp_to_pdf,
+            height=40,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#C0392B",
+            hover_color="#A93226"
+        )
+        pdf_btn.pack(fill="x", padx=15, pady=(0, 10))
         
         # Дополнительные кнопки
         buttons_frame = ctk.CTkFrame(section, fg_color="transparent")
@@ -595,6 +651,9 @@ class KompasManagerGUI(ctk.CTk):
         self.l1_entry.delete(0, 'end')
         self.order_entry.delete(0, 'end')
         self.developer_entry.delete(0, 'end')
+        self.checker_entry.delete(0, 'end')
+        self.organization_entry.delete(0, 'end')
+        self.material_entry.delete(0, 'end')
         self.current_project_path = None
         self.project_type_menu.set("ZVD.LITE")
         self.logger.info("🗑️ Все поля очищены\n")
@@ -808,13 +867,23 @@ class KompasManagerGUI(ctk.CTk):
         
         project_path = self.current_project_path or self.source_entry.get().strip()
         developer_name = self.developer_entry.get().strip()
+        checker_name = self.checker_entry.get().strip()
+        organization_name = self.organization_entry.get().strip()
+        material_name = self.material_combo.get().strip()
+        
+        # Новые поля
+        tech_control_name = self.tech_control_entry.get().strip()
+        norm_control_name = self.norm_control_entry.get().strip()
+        approved_name = self.approved_entry.get().strip()
+        date_value = self.date_entry.get().strip()
         
         if not project_path:
             self.logger.error("❌ Укажите путь к проекту в поле 'Исходный проект' (📂 Обзор)")
             return
         
-        if not developer_name:
-            self.logger.error("❌ Введите имя разработчика!")
+        if not any([developer_name, checker_name, organization_name, material_name, 
+                   tech_control_name, norm_control_name, approved_name, date_value]):
+            self.logger.error("❌ Заполните хотя бы одно поле штампа!")
             return
         
         def task():
@@ -824,7 +893,14 @@ class KompasManagerGUI(ctk.CTk):
                 self.logger.info("📋 ОБНОВЛЕНИЕ ШТАМПОВ ЧЕРТЕЖЕЙ")
                 self.logger.info("="*60)
                 self.logger.info(f"Проект: {project_path}")
-                self.logger.info(f"Разработчик: {developer_name}")
+                if developer_name: self.logger.info(f"Разработчик: {developer_name}")
+                if checker_name: self.logger.info(f"Проверил: {checker_name}")
+                if tech_control_name: self.logger.info(f"Т. контр.: {tech_control_name}")
+                if norm_control_name: self.logger.info(f"Н. контр.: {norm_control_name}")
+                if approved_name: self.logger.info(f"Утвердил: {approved_name}")
+                if organization_name: self.logger.info(f"Организация: {organization_name}")
+                if material_name: self.logger.info(f"Материал: {material_name}")
+                if date_value: self.logger.info(f"Дата: {date_value}")
                 self.logger.info("")
                 
                 # Проверка прерывания
@@ -835,7 +911,15 @@ class KompasManagerGUI(ctk.CTk):
                 # Обновление чертежей со штампами
                 result = self.drawing_updater.update_all_drawings(
                     project_path, 
-                    developer=developer_name
+                    developer=developer_name,
+                    checker=checker_name,
+                    organization=organization_name,
+                    material=material_name,
+                    tech_control=tech_control_name,
+                    norm_control=norm_control_name,
+                    approved=approved_name,
+                    date=date_value,
+                    check_cancel=lambda: self.cancel_requested
                 )
                 
                 if self.cancel_requested:
@@ -920,9 +1004,11 @@ class KompasManagerGUI(ctk.CTk):
                     self.logger.warning("❌ Операция отменена пользователем\n")
                     return
                 
+                project_type = self.project_type_menu.get()
+                
                 # Обновление обозначений
                 result = self.designation_updater.update_all_designations(
-                    project_path, h, b1, l1, order_number
+                    project_path, h, b1, l1, order_number, project_type
                 )
                 
                 if self.cancel_requested:
@@ -943,6 +1029,159 @@ class KompasManagerGUI(ctk.CTk):
             
             except Exception as e:
                 self.logger.error(f"❌ Критическая ошибка: {e}\n")
+                import traceback
+                self.logger.error(traceback.format_exc())
+            finally:
+                self.stop_processing()
+    
+    def paste_from_clipboard(self, entry_widget):
+        """Вставка текста из буфера обмена"""
+        try:
+            text = self.clipboard_get()
+            if text:
+                entry_widget.delete(0, 'end')
+                entry_widget.insert(0, text)
+        except Exception as e:
+            self.logger.warning(f"Ошибка вставки из буфера: {e}")
+
+    def recreate_dxf_bmp(self):
+        """Пересоздать DXF и BMP для текущего проекта"""
+        if self.is_processing:
+            self.logger.warning("⚠️ Дождитесь завершения текущей операции!")
+            return
+            
+        project_path = self.source_entry.get().strip() # Changed from self.project_path_entry.get() to self.source_entry.get() to match existing pattern
+        if not project_path:
+            self.logger.error("❌ Укажите путь к проекту в поле 'Исходный проект' (📂 Обзор)")
+            return
+            
+        def task():
+            self.start_processing()
+            try:
+                self.logger.info("\n" + "="*60)
+                self.logger.info("🔄 ПЕРЕСОЗДАНИЕ DXF И BMP")
+                self.logger.info("="*60)
+                self.logger.info(f"Проект: {project_path}\n")
+                
+                # 1. Экспорт DXF (разверток)
+                self.logger.info("--- ЭТАП 1: Экспорт разверток в DXF ---")
+                dxf_result = self.dxf_exporter.export_all_unfoldings(project_path)
+                
+                if self.cancel_requested: return
+                
+                # 2. Переименование DXF
+                self.logger.info("\n--- ЭТАП 2: Проверка имен DXF ---")
+                self.dxf_renamer.rename_dxf_files(project_path)
+                
+                if self.cancel_requested: return
+                
+                # 3. Экспорт чертежей в BMP
+                self.logger.info("\n--- ЭТАП 3: Создание картинок BMP ---")
+                
+                # Находим чертежи (исключая развертки)
+                drawing_files_for_bmp = self.drawing_exporter.find_drawing_files(
+                    project_path, 
+                    exclude_unfoldings=True
+                )
+                
+                if drawing_files_for_bmp:
+                    self.logger.info(f"Найдено чертежей для экспорта в BMP: {len(drawing_files_for_bmp)}")
+                    exported_bmp_count = 0
+                    for drawing_file in drawing_files_for_bmp:
+                        drawing_path = Path(drawing_file)
+                        output_path = str(drawing_path.with_suffix('.bmp'))
+                        
+                        export_result = self.drawing_exporter.export_drawing_to_image(
+                            str(drawing_file),
+                            output_path,
+                            format_type='BMP',
+                            resolution=300
+                        )
+                        if export_result['success']:
+                            exported_bmp_count += 1
+                        else:
+                            self.logger.warning(f"⚠️ Ошибка экспорта {drawing_file} в BMP: {export_result.get('error', 'Unknown')}")
+                    self.logger.info(f"✅ Экспортировано {exported_bmp_count} BMP файлов.\n")
+                else:
+                    self.logger.warning("⚠️ Чертежи для экспорта в BMP не найдены.\n")
+
+                if self.cancel_requested: return
+                
+                # 4. Организация BMP
+                self.logger.info("\n--- ЭТАП 4: Организация BMP ---")
+                bmp_organize_result = self.bmp_organizer.organize_bmp_files(project_path)
+                if bmp_organize_result['success']:
+                    self.logger.info(f"✅ BMP файлы организованы (перемещено: {bmp_organize_result.get('moved_count', 0)})\n")
+                else:
+                    self.logger.warning(f"⚠️ Ошибка организации BMP: {bmp_organize_result.get('error', 'Unknown')}\n")
+                
+                self.logger.info("\n" + "="*60)
+                self.logger.info("✅ ПЕРЕСОЗДАНИЕ ЗАВЕРШЕНО!")
+                self.logger.info("="*60 + "\n")
+                
+            except Exception as e:
+                self.logger.error(f"❌ Критическая ошибка: {e}\n")
+                import traceback
+                self.logger.error(traceback.format_exc())
+            finally:
+                self.stop_processing()
+        
+        threading.Thread(target=task, daemon=True).start()
+    
+    def combine_bmp_to_pdf(self):
+        """Объединить BMP в PDF"""
+        if self.is_processing:
+            self.logger.warning("⚠️ Дождитесь завершения текущей операции!")
+            return
+
+        project_path = self.source_entry.get().strip() # Changed from self.project_path_entry.get() to self.source_entry.get()
+        order_number = self.order_entry.get().strip()
+        material = self.material_combo.get().strip()
+        
+        if not project_path:
+            self.logger.error("❌ Укажите путь к проекту в поле 'Исходный проект' (📂 Обзор)")
+            return
+        
+        if not order_number:
+            self.logger.error("❌ Укажите номер заказа")
+            return
+            
+        def task():
+            self.start_processing()
+            try:
+                self.logger.info("\n" + "="*60)
+                self.logger.info("📄 ОБЪЕДИНЕНИЕ BMP В PDF")
+                self.logger.info("="*60)
+                self.logger.info(f"Проект: {project_path}")
+                self.logger.info(f"Номер заказа: {order_number}")
+                if material:
+                    self.logger.info(f"Материал: {material}")
+                self.logger.info("")
+
+                if self.cancel_requested:
+                    self.logger.warning("❌ Операция отменена пользователем\n")
+                    return
+
+                result = self.pdf_generator.generate_pdf(project_path, order_number, material)
+                
+                if self.cancel_requested:
+                    self.logger.warning("❌ Операция отменена пользователем\n")
+                    return
+
+                if result['success']:
+                    self.logger.info("\n" + "="*60)
+                    self.logger.info("✅ PDF УСПЕШНО СОЗДАН!")
+                    self.logger.info("="*60)
+                    self.logger.info(f"   Файл: {result.get('pdf_path', 'N/A')}\n")
+                else:
+                    self.logger.error(f"❌ Ошибка объединения в PDF: {result.get('error', 'Unknown')}")
+                    if result.get('errors'):
+                        for err in result['errors']:
+                            self.logger.error(f"   - {err}")
+                    self.logger.error("")
+
+            except Exception as e:
+                self.logger.error(f"❌ Критическая ошибка при объединении BMP в PDF: {e}\n")
                 import traceback
                 self.logger.error(traceback.format_exc())
             finally:
@@ -1303,6 +1542,7 @@ class KompasManagerGUI(ctk.CTk):
                 ('unfolding_dxf_exporter', unfolding_dxf_exporter),
                 ('bmp_organizer', bmp_organizer),
                 ('template_manager', template_manager),
+                ('pdf_generator', pdf_generator),
             ]
             
             reloaded_count = 0
@@ -1314,6 +1554,21 @@ class KompasManagerGUI(ctk.CTk):
                 except Exception as e:
                     self.logger.error(f"  ✗ {module_name}: {e}")
             
+            # ВАЖНО: Обновляем глобальные ссылки на классы из перезагруженных модулей
+            global ProjectCopier, CascadingVariablesUpdater, DesignationUpdaterFixed, DxfRenamer
+            global DrawingAutoUpdater, DrawingExporter, UnfoldingDxfExporter, BmpOrganizer, TemplateManager, PdfGenerator
+            
+            ProjectCopier = project_copier.ProjectCopier
+            CascadingVariablesUpdater = cascading_variables_updater.CascadingVariablesUpdater
+            DesignationUpdaterFixed = designation_updater_fixed.DesignationUpdaterFixed
+            DxfRenamer = dxf_renamer.DxfRenamer
+            DrawingAutoUpdater = drawing_auto_updater.DrawingAutoUpdater
+            DrawingExporter = drawing_exporter.DrawingExporter
+            UnfoldingDxfExporter = unfolding_dxf_exporter.UnfoldingDxfExporter
+            BmpOrganizer = bmp_organizer.BmpOrganizer
+            TemplateManager = template_manager.TemplateManager
+            PdfGenerator = pdf_generator.PdfGenerator
+            
             # Пересоздаем экземпляры компонентов
             self.copier = ProjectCopier()
             self.updater = CascadingVariablesUpdater()
@@ -1324,6 +1579,7 @@ class KompasManagerGUI(ctk.CTk):
             self.drawing_exporter = DrawingExporter()
             self.bmp_organizer = BmpOrganizer()
             self.template_manager = TemplateManager()
+            self.pdf_generator = PdfGenerator()
             
             # Перенастраиваем логирование для новых компонентов
             gui_handler = None
@@ -1361,9 +1617,7 @@ class KompasManagerGUI(ctk.CTk):
     
     def clear_log(self):
         """Очистить лог"""
-        self.log_text.configure(state='normal')
         self.log_text.delete('1.0', 'end')
-        self.log_text.configure(state='disabled')
         self.logger.info("Лог очищен\n")
     
     def save_log(self):
@@ -1376,6 +1630,11 @@ class KompasManagerGUI(ctk.CTk):
         
         if filename:
             try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(self.log_text.get('1.0', 'end'))
+                self.logger.info(f"Лог сохранен в: {filename}")
+            except Exception as e:
+                self.logger.error(f"Ошибка сохранения лога: {e}")
                 with open(filename, 'w', encoding='utf-8') as f:
                     f.write(self.log_text.get('1.0', 'end'))
                 self.logger.info(f"✅ Лог сохранён: {filename}\n")

@@ -8,7 +8,7 @@ import time
 import pythoncom
 from pathlib import Path
 from typing import Dict
-from win32com.client import Dispatch
+from win32com.client import Dispatch, dynamic
 from .base_component import BaseKompasComponent
 
 class DrawingAutoUpdater(BaseKompasComponent):
@@ -17,12 +17,23 @@ class DrawingAutoUpdater(BaseKompasComponent):
     def __init__(self):
         super().__init__()
     
-    def update_all_drawings(self, project_path: str) -> Dict:
+    def update_all_drawings(self, project_path: str, developer: str = None, checker: str = None, organization: str = None, material: str = None, 
+                          tech_control: str = None, norm_control: str = None, approved: str = None, date: str = None,
+                          check_cancel=None) -> Dict:
         """
         Автоматическое обновление всех чертежей в проекте
         
         Args:
             project_path: Путь к проекту
+            developer: Имя разработчика (ячейка 110)
+            checker: Имя проверяющего (ячейка 111)
+            organization: Организация (ячейка 9)
+            material: Материал (ячейка 3)
+            tech_control: Т. контр. (ячейка 112)
+            norm_control: Н. контр. (ячейка 114)
+            approved: Утв. (ячейка 115)
+            date: Дата (ячейки 130-135)
+            check_cancel: Функция проверки отмены (возвращает True если нужно прервать)
             
         Returns:
             Dict с результатами
@@ -39,7 +50,7 @@ class DrawingAutoUpdater(BaseKompasComponent):
         
         try:
             self.logger.info("="*60)
-            self.logger.info("АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ЧЕРТЕЖЕЙ")
+            self.logger.info("АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ЧЕРТЕЖЕЙ (v3 - Full Fields)")
             self.logger.info("="*60)
             
             # Принудительное переподключение для стабильности
@@ -58,40 +69,110 @@ class DrawingAutoUpdater(BaseKompasComponent):
             
             self.logger.info(f"\nНайдено чертежей: {len(all_drawings)}\n")
             
-            api5 = Dispatch("Kompas.Application.5")
-            api7 = Dispatch("Kompas.Application.7")
+            # Используем dynamic.Dispatch для обхода проблем с типами (gencache)
+            try:
+                api7 = dynamic.Dispatch("Kompas.Application.7")
+            except Exception as e:
+                self.logger.warning(f"Ошибка dynamic.Dispatch: {e}")
+                api7 = Dispatch("Kompas.Application.7")
             
             for drawing in all_drawings:
+                # ПРОВЕРКА ОТМЕНЫ
+                if check_cancel and check_cancel():
+                    self.logger.warning("⚠️ ОПЕРАЦИЯ ПРЕРВАНА ПОЛЬЗОВАТЕЛЕМ")
+                    break
                 try:
                     self.logger.info(f"{'='*60}")
                     self.logger.info(f"{drawing.name}")
                     self.logger.info(f"{'='*60}")
                     
-                    # Открываем чертеж
+                    # Открываем документ (API7)
                     self.logger.info("  Открытие...")
-                    doc = api7.Documents.Open(str(drawing), False, True)
-                    time.sleep(1.5)
-                    
-                    if not doc:
-                        self.logger.warning("  ✗ Не удалось открыть")
+                    doc7 = api7.Documents.Open(str(drawing), False, False)
+                    if not doc7:
+                        self.logger.error(f"  Не удалось открыть файл (API7)")
                         result['drawings_failed'] += 1
                         continue
                     
-                    # Получаем 2D документ
-                    doc2d = api5.ActiveDocument2D
+                    # Получаем интерфейс 2D документа
+                    kompas_document_2d = api7.ActiveDocument
                     
-                    if not doc2d:
-                        self.logger.warning("  ✗ Не 2D документ")
-                        api7.ActiveDocument.Close(False)
-                        result['drawings_failed'] += 1
-                        continue
+                    # ОБНОВЛЕНИЕ ШТАМПА (API7)
+                    if any([developer, checker, organization, material, tech_control, norm_control, approved, date]):
+                        try:
+                            self.logger.info(f"  Обновление штампа (API7)...")
+                            
+                            # Получаем коллекцию листов оформления
+                            layout_sheets = kompas_document_2d.LayoutSheets
+                            # Берем первый лист (обычно штамп там)
+                            sheet = layout_sheets.Item(0)
+                            # Получаем штамп
+                            stamp = sheet.Stamp
+                            
+                            if stamp:
+                                # Словарь полей: {номер_ячейки: значение}
+                                fields_to_update = {}
+                                
+                                # Основные поля
+                                if developer: fields_to_update[110] = developer
+                                if checker: fields_to_update[111] = checker
+                                if tech_control: fields_to_update[112] = tech_control
+                                if norm_control: fields_to_update[114] = norm_control
+                                if approved: fields_to_update[115] = approved
+                                
+                                if organization: fields_to_update[9] = organization
+                                
+                                # Материал НЕ для сборочных чертежей (СБ)
+                                is_assembly = "СБ" in drawing.name or "сб" in drawing.name.lower()
+                                if material and not is_assembly:
+                                    fields_to_update[3] = material
+                                    self.logger.info(f"    Материал: {material}")
+                                elif material and is_assembly:
+                                    self.logger.info(f"    Материал пропущен (сборочный чертеж)")
+                                
+                                # ЛОГИКА ДАТЫ:
+                                # Заполняем только дату разработки (ячейка 130)
+                                date_cells_updated = []
+                                if date:
+                                    fields_to_update[130] = date  # Дата разработки
+                                    date_cells_updated = ["Разраб."]
+                                
+                                for cell_id, value in fields_to_update.items():
+                                    try:
+                                        # Получаем интерфейс текста ячейки
+                                        text_item = stamp.Text(cell_id)
+                                        # Записываем значение
+                                        text_item.Str = str(value)
+                                        # text_item.Update() # Убрали, так как вызывает ошибку, stamp.Update() достаточно
+                                        self.logger.info(f"    Ячейка {cell_id}: {value}")
+                                    except Exception as e:
+                                        self.logger.warning(f"    ⚠️ Ошибка ячейки {cell_id}: {e}")
+                                
+                                # Обновляем сам штамп
+                                stamp.Update()
+                                
+                                if date_cells_updated:
+                                    self.logger.info(f"  📅 Дата '{date}' установлена для: {', '.join(date_cells_updated)}")
+                                self.logger.info(f"  ✓ Штамп обработан")
+                            else:
+                                self.logger.warning(f"  ⚠️ Штамп не найден")
+                                
+                        except Exception as e:
+                            self.logger.warning(f"  ⚠️ Общая ошибка штампа: {e}")
                     
                     # Определяем, это сборочный чертеж или нет
                     is_assembly = "конвектор" in drawing.name.lower() or "сборочный" in drawing.name.lower()
                     
-                    # Пересобираем чертеж
+                    # Перестраиваем
                     self.logger.info("  Пересборка...")
-                    rebuild_result = doc2d.ksRebuildDocument()
+                    try:
+                        # Пробуем вызвать как метод
+                        kompas_document_2d.RebuildDocument()
+                    except TypeError:
+                        # Если это свойство или не вызывается
+                        pass
+                    except Exception as e:
+                        self.logger.warning(f"  ⚠️ Ошибка перестроения: {e}")
                     
                     # КРИТИЧНО: Для сборочного чертежа - больше времени!
                     if is_assembly:
@@ -100,12 +181,15 @@ class DrawingAutoUpdater(BaseKompasComponent):
                         
                         # ПОВТОРНАЯ ПЕРЕСБОРКА для надежности
                         self.logger.info("  Повторная пересборка...")
-                        doc2d.ksRebuildDocument()
+                        try:
+                            kompas_document_2d.RebuildDocument()
+                        except:
+                            pass
                         time.sleep(3)
                     else:
                         time.sleep(2)
                     
-                    self.logger.info(f"  Результат пересборки: {rebuild_result}")
+                    # self.logger.info(f"  Результат пересборки: {rebuild_result}")
                     
                     # Сохраняем
                     self.logger.info("  Сохранение...")

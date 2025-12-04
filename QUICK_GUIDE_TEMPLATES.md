@@ -151,3 +151,16 @@ kompas3d_project_manager/
 **Дата**: 28.10.2025  
 **Для**: КОМПАС-3D Project Manager v2.2+
 
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -114,6 +114,19 @@ class DrawingExporter(BaseKompasComponent):
             # Принудительная перестройка чертежа
             if not self.force_rebuild_drawing():
                 self.logger.warning("Не удалось перестроить чертеж, продолжаем...")
+            else:
+                # Удаляем watermark (надписи о некоммерческом использовании)
+                self.remove_watermark()
+                
+                # ВАЖНО: Сохраняем чертеж после Rebuild!
+                try:
+                    self.logger.info("Сохранение чертежа после Rebuild...")
+                    if self.current_document:
+                        self.current_document.Save()
+                        time.sleep(0.5)  # Даем время на сохранение
+                        self.logger.info("Чертеж сохранен после Rebuild")
+                except Exception as e:
+                    self.logger.warning(f"Ошибка сохранения после Rebuild: {e}")
             
             # Получаем API 5 для работы с растровым форматом
             api5_obj = Dispatch("Kompas.Application.5")
@@ -218,6 +231,232 @@ class DrawingExporter(BaseKompasComponent):
         except Exception as e:
             self.logger.error(f"Ошибка перестройки чертежа: {e}")
             return False
+    
+    def remove_watermark(self) -> bool:
+        """Удаление надписей о некоммерческом использовании"""
+        try:
+            self.logger.info("Удаление watermark...")
+            
+            # Получаем API 5
+            api5_obj = Dispatch("Kompas.Application.5")
+            document_2d = api5_obj.ActiveDocument2D
+            
+            if not document_2d:
+                return False
+            
+            # Получаем все листы
+            views_and_layers_manager = document_2d.ViewsAndLayersManager
+            if not views_and_layers_manager:
+                return False
+            
+            views = views_and_layers_manager.Views
+            if not views:
+                return False
+            
+            removed_count = 0
+            watermark_keywords = [
+                "не для коммерческого использования",
+                "некоммерческ",
+                "non-commercial",
+                "educational"
+            ]
+            
+            # Проходим по всем видам
+            for view_index in range(views.Count):
+                try:
+                    view = views.Item(view_index)
+                    if not view:
+                        continue
+                    
+                    # Получаем объекты вида
+                    drawing_container = view.DrawingContainer
+                    if not drawing_container:
+                        continue
+                    
+                    # Проходим по всем объектам
+                    for obj_index in range(drawing_container.Count - 1, -1, -1):  # Обратный порядок для безопасного удаления
+                        try:
+                            obj = drawing_container.Item(obj_index)
+                            if not obj:
+                                continue
+                            
+                            # Проверяем, является ли объект текстом
+                            if hasattr(obj, 'Text'):
+                                text_content = str(obj.Text).lower()
+                                
+                                # Проверяем на наличие ключевых слов watermark
+                                for keyword in watermark_keywords:
+                                    if keyword in text_content:
+                                        try:
+                                            drawing_container.Delete(obj_index)
+                                            removed_count += 1
+                                            self.logger.info(f"  ✓ Удален watermark: {text_content[:50]}...")
+                                            break
+                                        except:
+                                            pass
+                        except:
+                            continue
+                            
+                except:
+                    continue
+            
+            if removed_count > 0:
+                self.logger.info(f"Удалено watermark объектов: {removed_count}")
+            else:
+                self.logger.info("Watermark не найден")
+            
+            return True
+                
+        except Exception as e:
+            self.logger.warning(f"Ошибка удаления watermark: {e}")
+            return False
+    
+    def export_drawing_to_pdf(self, drawing_path: str, output_path: str) -> Dict:
+        """
+        Экспорт чертежа напрямую в PDF через КОМПАС API
+        
+        Args:
+            drawing_path: Путь к файлу чертежа
+            output_path: Путь для сохранения PDF
+            
+        Returns:
+            Dict с результатами экспорта
+        """
+        result = {
+            'success': False,
+            'output_file': None,
+            'file_size': 0,
+            'error': None
+        }
+        
+        try:
+            self.logger.info(f"ЭКСПОРТ ЧЕРТЕЖА В PDF: {Path(drawing_path).name}")
+            self.logger.info("=" * 40)
+            
+            # Подключение к КОМПАС
+            if not self.connect_to_kompas(force_reconnect=True):
+                result['error'] = "Не удалось подключиться к КОМПАС-3D"
+                return result
+            
+            if not Path(drawing_path).exists():
+                result['error'] = f"Файл чертежа не найден"
+                return result
+            
+            # Подготовка пути вывода
+            output_path_obj = Path(output_path)
+            output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Удаляем существующий файл
+            if output_path_obj.exists():
+                output_path_obj.unlink()
+            
+            # Открываем чертеж
+            if not self.open_document(drawing_path):
+                result['error'] = "Не удалось открыть чертеж"
+                return result
+            
+            # Перестройка чертежа
+            if not self.force_rebuild_drawing():
+                self.logger.warning("Не удалось перестроить чертеж")
+            
+            # Получаем API 5 для SaveAs
+            api5_obj = Dispatch("Kompas.Application.5")
+            document_2d = api5_obj.ActiveDocument2D
+            
+            if not document_2d:
+                result['error'] = "Не удалось получить интерфейс документа"
+                return result
+            
+            # Сохраняем в PDF через Converter
+            try:
+                self.logger.info("Сохранение в PDF через Converter...")
+                
+                # Получаем API 7 для доступа к Converter
+                from win32com.client import gencache
+                try:
+                    kompas_api7 = gencache.EnsureDispatch("Kompas.Application.7")
+                except:
+                    from win32com.client import dynamic
+                    kompas_api7 = dynamic.Dispatch("Kompas.Application.7")
+                
+                # Путь к Pdf2d.dll (обычно в папке Bin КОМПАСа)
+                # Пытаемся найти КОМПАС в стандартных местах
+                import os
+                pdf_dll_paths = [
+                    r"C:\Program Files\ASCON\KOMPAS-3D v23\Bin\Pdf2d.dll",
+                    r"C:\Program Files (x86)\ASCON\KOMPAS-3D v23\Bin\Pdf2d.dll",
+                    r"C:\Program Files\ASCON\KOMPAS-3D v22\Bin\Pdf2d.dll",
+                    r"C:\Program Files\ASCON\KOMPAS-3D v21\Bin\Pdf2d.dll",
+                    r"C:\Program Files\ASCON\KOMPAS-3D v20\Bin\Pdf2d.dll",
+                    r"C:\Program Files\ASCON\KOMPAS-3D v19\Bin\Pdf2d.dll",
+                    r"C:\Program Files (x86)\ASCON\KOMPAS-3D v22\Bin\Pdf2d.dll",
+                    r"C:\Program Files (x86)\ASCON\KOMPAS-3D v21\Bin\Pdf2d.dll",
+                ]
+                
+                pdf_dll_path = None
+                for path in pdf_dll_paths:
+                    if os.path.exists(path):
+                        pdf_dll_path = path
+                        break
+                
+                if not pdf_dll_path:
+                    # Пытаемся получить путь из реестра или переменных окружения
+                    result['error'] = "Не найден Pdf2d.dll. Проверьте установку КОМПАС-3D"
+                    self.logger.error(result['error'])
+                    return result
+                
+                self.logger.info(f"Используется Pdf2d.dll: {pdf_dll_path}")
+                
+                # Создаем конвертер
+                converter = kompas_api7.Converter(pdf_dll_path)
+                if not converter:
+                    result['error'] = "Не удалось создать конвертер PDF"
+                    return result
+                
+                # Получаем параметры PDF
+                pdf_params = converter.ConverterParameters(0, 0, 0)  # 0 = текущий документ
+                if pdf_params:
+                    # Настройка параметров (цветной PDF)
+                    try:
+                        pdf_params.ColorType = 3  # Цветной
+                    except:
+                        pass
+                
+                # Конвертируем
+                convert_result = converter.Convert(str(output_path_obj), 0, 0)
+                
+                if convert_result:
+                    time.sleep(2)  # Даем время на создание файла
+                    
+                    # Проверяем результат
+                    if output_path_obj.exists():
+                        file_size = output_path_obj.stat().st_size
+                        result['success'] = True
+                        result['output_file'] = str(output_path_obj)
+                        result['file_size'] = file_size
+                        
+                        self.logger.info(f"PDF создан: {output_path_obj.name} ({file_size:,} байт)")
+                    else:
+                        result['error'] = "Файл PDF не создался"
+                else:
+                    result['error'] = "Converter.Convert вернул False"
+                    
+            except Exception as e:
+                result['error'] = f"Ошибка сохранения PDF: {e}"
+                self.logger.error(result['error'])
+            
+            # Закрываем документ
+            self.close_document()
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"Общая ошибка экспорта в PDF: {e}"
+            result['error'] = error_msg
+            self.logger.error(error_msg)
+            return result
+        finally:
+            self.disconnect_from_kompas()
     
     def export_all_drawings(self, project_path: str, output_folder: str = None, 
                            format_type: str = 'PNG', resolution: int = 300) -> Dict:

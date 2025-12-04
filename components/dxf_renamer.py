@@ -323,6 +323,11 @@ class DxfRenamer:
                         self.logger.info(f"  '{dxf_file.name}'")
                         self.logger.info(f"  → '{new_name}' (кол-во: {quantity})")
                         
+                        # Проверяем, существует ли целевой файл
+                        if new_path.exists():
+                            self.logger.warning(f"  ⚠️ Файл уже существует, удаляем: {new_name}")
+                            new_path.unlink()
+                        
                         dxf_file.rename(new_path)
                         result['renamed_count'] += 1
                     

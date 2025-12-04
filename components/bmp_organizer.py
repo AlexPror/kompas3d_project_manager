@@ -104,3 +104,4 @@ class BmpOrganizer:
         bmp_folder.mkdir(exist_ok=True)
         return str(bmp_folder)
 
+
