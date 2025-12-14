@@ -25,6 +25,7 @@ from components.unfolding_dxf_exporter import UnfoldingDxfExporter
 from components.bmp_organizer import BmpOrganizer
 from components.template_manager import TemplateManager
 from components.pdf_generator import PdfGenerator
+from __version__ import __version__
 
 # Сохраняем ссылки на модули для перезагрузки
 from components import (
@@ -77,7 +78,7 @@ class KompasManagerGUI(ctk.CTk):
         super().__init__()
         
         # Настройки окна
-        self.title("🔧 КОМПАС-3D Project Manager")
+        self.title(f"КОМПАС-3D Project Manager v{__version__}")
         self.geometry("1200x800")
         
         # Компоненты
@@ -481,13 +482,15 @@ class KompasManagerGUI(ctk.CTk):
         self.material_combo = ctk.CTkComboBox(
             row6_frame,
             values=[
-                "Сталь 08Х18Н10 (AISI 304)\nлист 1,0 мм, ГОСТ 5632",
-                "Сталь оцинкованная 1,0\nГОСТ 14918‑80"
+                "$d Лист 1,0х1250x2500 ГОСТ 5582-75 ; 08Х18Н10 ГОСТ 5632-2014 $",
+                "$d Лист 1,0х1500x3000 ГОСТ 5582-75 ; 08Х18Н10 ГОСТ 5632-2014 $",
+                "Оц. $d Б-ПН-0-1,0х1250x2500 ГОСТ 19904-2015 ; 08ПС ГОСТ 14918-2020 $"
             ],
             width=400,
-            justify="left"
+            justify="left",
+            state="normal"  # Делаем редактируемым для ввода своих вариантов
         )
-        self.material_combo.set("Сталь 08Х18Н10 (AISI 304)\nлист 1,0 мм, ГОСТ 5632") # Default
+        self.material_combo.set("$d Лист 1,0х1250x2500 ГОСТ 5582-75 ; 08Х18Н10 ГОСТ 5632-2014 $") # Default
         self.material_combo.pack(fill="x", pady=(5, 0))
         
         # Кнопки обновления
@@ -553,7 +556,7 @@ class KompasManagerGUI(ctk.CTk):
         # Большая кнопка "Всё сразу"
         all_btn = ctk.CTkButton(
             section,
-            text="🚀 ПОЛНЫЙ ЦИКЛ (10 шагов): Копирование → Переименование → Переменные → Обозначения → \nЭкспорт DXF → Переименование DXF → Чертежи → BMP → Организация → Готово!",
+            text="🚀 ПОЛНЫЙ ЦИКЛ (6 шагов): Копирование → Переименование → Переменные → \nОбозначения → Штампы → Готово!",
             command=self.do_everything,
             height=60,
             font=ctk.CTkFont(size=13, weight="bold"),
@@ -783,6 +786,13 @@ class KompasManagerGUI(ctk.CTk):
                             from pathlib import Path
                             self.logger.info(f"   • {Path(renamed_file).name}")
                         self.logger.info("")
+                        
+                        # НОВОЕ: Автоматическое обновление штампов
+                        if self._has_stamp_data():
+                            if self.cancel_requested:
+                                self.logger.warning("❌ Операция отменена пользователем\n")
+                                return
+                            self._update_stamps_after_copy(self.current_project_path)
                     else:
                         self.logger.warning(f"⚠️ Ошибка переименования: {result_rename.get('error', 'Unknown')}\n")
                 else:
@@ -876,13 +886,14 @@ class KompasManagerGUI(ctk.CTk):
         norm_control_name = self.norm_control_entry.get().strip()
         approved_name = self.approved_entry.get().strip()
         date_value = self.date_entry.get().strip()
+        order_number = self.order_entry.get().strip()
         
         if not project_path:
             self.logger.error("❌ Укажите путь к проекту в поле 'Исходный проект' (📂 Обзор)")
             return
         
         if not any([developer_name, checker_name, organization_name, material_name, 
-                   tech_control_name, norm_control_name, approved_name, date_value]):
+                   tech_control_name, norm_control_name, approved_name, date_value, order_number]):
             self.logger.error("❌ Заполните хотя бы одно поле штампа!")
             return
         
@@ -901,6 +912,7 @@ class KompasManagerGUI(ctk.CTk):
                 if organization_name: self.logger.info(f"Организация: {organization_name}")
                 if material_name: self.logger.info(f"Материал: {material_name}")
                 if date_value: self.logger.info(f"Дата: {date_value}")
+                if order_number: self.logger.info(f"Номер заказа: {order_number}")
                 self.logger.info("")
                 
                 # Проверка прерывания
@@ -919,6 +931,7 @@ class KompasManagerGUI(ctk.CTk):
                     norm_control=norm_control_name,
                     approved=approved_name,
                     date=date_value,
+                    order_number=order_number,
                     check_cancel=lambda: self.cancel_requested
                 )
                 
@@ -945,6 +958,115 @@ class KompasManagerGUI(ctk.CTk):
                 self.stop_processing()
         
         threading.Thread(target=task, daemon=True).start()
+
+    def _has_stamp_data(self):
+        """Проверяет, заполнены ли какие-либо поля штампа"""
+        developer_name = self.developer_entry.get().strip()
+        checker_name = self.checker_entry.get().strip()
+        organization_name = self.organization_entry.get().strip()
+        material_name = self.material_combo.get().strip()
+        tech_control_name = self.tech_control_entry.get().strip()
+        norm_control_name = self.norm_control_entry.get().strip()
+        approved_name = self.approved_entry.get().strip()
+        date_value = self.date_entry.get().strip()
+        order_number = self.order_entry.get().strip()
+        
+        has_data = any([developer_name, checker_name, organization_name, material_name,
+                       tech_control_name, norm_control_name, approved_name, date_value, order_number])
+        
+        # Логирование для отладки
+        self.logger.info(f"🔍 Проверка наличия данных штампа: {has_data}")
+        if has_data:
+            filled_fields = []
+            if developer_name: filled_fields.append(f"Разработчик: {developer_name}")
+            if checker_name: filled_fields.append(f"Проверил: {checker_name}")
+            if organization_name: filled_fields.append(f"Организация: {organization_name}")
+            if material_name: filled_fields.append(f"Материал: {material_name}")
+            if tech_control_name: filled_fields.append(f"Т. контр.: {tech_control_name}")
+            if norm_control_name: filled_fields.append(f"Н. контр.: {norm_control_name}")
+            if approved_name: filled_fields.append(f"Утвердил: {approved_name}")
+            if date_value: filled_fields.append(f"Дата: {date_value}")
+            if order_number: filled_fields.append(f"Номер заказа: {order_number}")
+            self.logger.info(f"   Заполнено полей: {len(filled_fields)} - {', '.join(filled_fields)}")
+        else:
+            self.logger.info("   Поля штампа пусты, автообновление не будет выполнено")
+        
+        return has_data
+    
+    def _update_stamps_after_copy(self, project_path):
+        """
+        Обновление штампов сразу после копирования проекта.
+        Вызывается внутри потока copy_project, поэтому не создает новый поток.
+        """
+        self.logger.info("\n" + "="*60)
+        self.logger.info("🔄 НАЧАЛО АВТОМАТИЧЕСКОГО ОБНОВЛЕНИЯ ШТАМПОВ")
+        self.logger.info("="*60)
+        
+        try:
+            developer_name = self.developer_entry.get().strip()
+            checker_name = self.checker_entry.get().strip()
+            organization_name = self.organization_entry.get().strip()
+            material_name = self.material_combo.get().strip()
+            tech_control_name = self.tech_control_entry.get().strip()
+            norm_control_name = self.norm_control_entry.get().strip()
+            approved_name = self.approved_entry.get().strip()
+            date_value = self.date_entry.get().strip()
+            order_number = self.order_entry.get().strip()
+            
+            self.logger.info("\n" + "="*60)
+            self.logger.info("📋 АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ШТАМПОВ")
+            self.logger.info("="*60)
+            self.logger.info(f"Проект: {project_path}")
+            if developer_name: self.logger.info(f"Разработчик: {developer_name}")
+            if checker_name: self.logger.info(f"Проверил: {checker_name}")
+            if tech_control_name: self.logger.info(f"Т. контр.: {tech_control_name}")
+            if norm_control_name: self.logger.info(f"Н. контр.: {norm_control_name}")
+            if approved_name: self.logger.info(f"Утвердил: {approved_name}")
+            if organization_name: self.logger.info(f"Организация: {organization_name}")
+            if material_name: self.logger.info(f"Материал: {material_name}")
+            if date_value: self.logger.info(f"Дата: {date_value}")
+            if order_number: self.logger.info(f"Номер заказа: {order_number}")
+            self.logger.info("")
+            
+            # Проверка прерывания
+            if self.cancel_requested:
+                self.logger.warning("❌ Операция отменена пользователем\n")
+                return
+            
+            # Обновление чертежей со штампами
+            result = self.drawing_updater.update_all_drawings(
+                project_path, 
+                developer=developer_name,
+                checker=checker_name,
+                organization=organization_name,
+                material=material_name,
+                tech_control=tech_control_name,
+                norm_control=norm_control_name,
+                approved=approved_name,
+                date=date_value,
+                order_number=order_number,
+                check_cancel=lambda: self.cancel_requested
+            )
+            
+            if self.cancel_requested:
+                self.logger.warning("❌ Операция отменена пользователем\n")
+                return
+            
+            if result['success']:
+                self.logger.info("\n" + "="*60)
+                self.logger.info("✅ ШТАМПЫ УСПЕШНО ОБНОВЛЕНЫ!")
+                self.logger.info("="*60)
+                self.logger.info(f"   Чертежей обновлено: {result.get('drawings_updated', 0)}")
+                self.logger.info(f"   Ошибок: {result.get('drawings_failed', 0)}")
+                self.logger.info("="*60 + "\n")
+            else:
+                self.logger.error(f"❌ Ошибки обновления штампов: {result.get('errors', 'Unknown')}")
+                self.logger.error("")
+        
+        except Exception as e:
+            self.logger.error(f"❌ Критическая ошибка обновления штампов: {e}\n")
+            import traceback
+            self.logger.error(traceback.format_exc())
     
     def update_designations_only(self):
         """Обновление обозначений в существующем проекте"""
@@ -1300,48 +1422,8 @@ class KompasManagerGUI(ctk.CTk):
                     self.logger.warning("❌ Операция прервана пользователем\n")
                     return
                 
-                # Шаг 5: Экспорт разверток в DXF
-                self.logger.info("ШАГ 5/10: Экспорт разверток в DXF...")
-                
-                from pathlib import Path
-                dxf_folder = Path(self.current_project_path) / "DXF"
-                dxf_folder.mkdir(exist_ok=True)
-                
-                result4_export = self.dxf_exporter.export_all_unfoldings(
-                    self.current_project_path,
-                    str(dxf_folder)
-                )
-                
-                if result4_export['success']:
-                    self.logger.info(f"✅ DXF экспортированы (файлов: {result4_export['exported']}/{result4_export['total']})\n")
-                else:
-                    self.logger.warning(f"⚠️ DXF экспорт: {result4_export.get('errors', ['Нет разверток'])}\n")
-                
-                time.sleep(1)
-                
-                # Проверка прерывания
-                if self.cancel_requested:
-                    self.logger.warning("❌ Операция прервана пользователем\n")
-                    return
-                
-                # Шаг 6: Переименование DXF
-                self.logger.info("ШАГ 6/10: Переименование DXF файлов...")
-                result5 = self.dxf_renamer.rename_dxf_files(self.current_project_path, order_number)
-                
-                if result5['success']:
-                    self.logger.info(f"✅ DXF переименованы (файлов: {result5['renamed_count']})\n")
-                else:
-                    self.logger.warning(f"⚠️ DXF: {result5.get('errors', ['Нет DXF папки'])}\n")
-                
-                time.sleep(1)
-                
-                # Проверка прерывания
-                if self.cancel_requested:
-                    self.logger.warning("❌ Операция прервана пользователем\n")
-                    return
-                
-                # Шаг 7: Обновление чертежей
-                self.logger.info("ШАГ 7/10: Обновление чертежей...")
+                # Шаг 5: Обновление чертежей
+                self.logger.info("ШАГ 5/6: Обновление чертежей...")
                 result6 = self.drawing_updater.update_all_drawings(self.current_project_path, developer=developer_name)
                 
                 if result6['success']:
@@ -1356,68 +1438,8 @@ class KompasManagerGUI(ctk.CTk):
                     self.logger.warning("❌ Операция прервана пользователем\n")
                     return
                 
-                # Шаг 8: Экспорт чертежей в BMP
-                self.logger.info("ШАГ 8/10: Экспорт чертежей в BMP...")
-                
-                # Находим чертежи (исключая развертки)
-                drawing_files = self.drawing_exporter.find_drawing_files(
-                    self.current_project_path, 
-                    exclude_unfoldings=True
-                )
-                
-                if drawing_files:
-                    self.logger.info(f"Найдено чертежей для экспорта: {len(drawing_files)}")
-                    
-                    # Экспортируем каждый чертеж
-                    exported_count = 0
-                    for drawing_file in drawing_files:
-                        from pathlib import Path
-                        drawing_path = Path(drawing_file)
-                        output_path = str(drawing_path.with_suffix('.bmp'))
-                        
-                        export_result = self.drawing_exporter.export_drawing_to_image(
-                            str(drawing_file),
-                            output_path,
-                            format_type='BMP',
-                            resolution=300
-                        )
-                        
-                        if export_result['success']:
-                            exported_count += 1
-                            self.logger.info(f"  ✓ {drawing_path.name} → BMP")
-                        else:
-                            self.logger.warning(f"  ✗ {drawing_path.name}: {export_result.get('error', 'Unknown')}")
-                    
-                    self.logger.info(f"✅ Экспортировано BMP: {exported_count}/{len(drawing_files)}\n")
-                else:
-                    self.logger.info("  Чертежей для экспорта не найдено\n")
-                    exported_count = 0
-                
-                time.sleep(1)
-                
-                # Проверка прерывания
-                if self.cancel_requested:
-                    self.logger.warning("❌ Операция прервана пользователем\n")
-                    return
-                
-                # Шаг 9: Организация BMP файлов
-                self.logger.info("ШАГ 9/10: Организация BMP файлов...")
-                result8 = self.bmp_organizer.organize_bmp_files(self.current_project_path)
-                
-                if result8['success'] and result8['moved_count'] > 0:
-                    self.logger.info(f"✅ BMP файлы организованы: {result8['moved_count']} → папка BMP/\n")
-                else:
-                    self.logger.info(f"  Нет BMP файлов для организации\n")
-                
-                time.sleep(1)
-                
-                # Проверка прерывания
-                if self.cancel_requested:
-                    self.logger.warning("❌ Операция прервана пользователем\n")
-                    return
-                
-                # Шаг 10: Итоговая информация
-                self.logger.info("ШАГ 10/10: Формирование итогового отчета...")
+                # Шаг 6: Итоговая информация
+                self.logger.info("ШАГ 6/6: Формирование итогового отчета...")
                 
                 # Итоговое сообщение
                 self.logger.info("\n" + "="*60)
@@ -1431,11 +1453,8 @@ class KompasManagerGUI(ctk.CTk):
                 self.logger.info("📈 Статистика:")
                 self.logger.info(f"  ✅ Переменных обновлено: {result2.get('total_vars_in_parts', 0)}")
                 self.logger.info(f"  ✅ Деталей переименовано: {result3.get('parts_renamed', 0)}")
-                self.logger.info(f"  ✅ DXF экспортировано: {result4_export.get('exported', 0)}")
-                self.logger.info(f"  ✅ DXF переименовано: {result5.get('renamed_count', 0)}")
                 self.logger.info(f"  ✅ Чертежей обновлено: {result6.get('drawings_updated', 0)}")
-                self.logger.info(f"  ✅ BMP экспортировано: {exported_count if 'exported_count' in locals() else 0}")
-                self.logger.info("="*60 + "\n")
+                self.logger.info("=" * 60 + "\n")
                 
             except Exception as e:
                 self.logger.error(f"❌ Критическая ошибка: {e}")

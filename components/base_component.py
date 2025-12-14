@@ -4,11 +4,36 @@
 import logging
 import pythoncom
 import sys
+import os
+import shutil
 from typing import Dict, Optional
-from win32com.client import Dispatch
 
 sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
+
+
+def clear_kompas_cache():
+    """Очистка кэша win32com для KOMPAS для устранения ошибок CLSIDToClassMap"""
+    try:
+        import win32com
+        gen_py_path = os.path.join(os.path.dirname(win32com.__file__), 'gen_py')
+        if os.path.exists(gen_py_path):
+            for item in os.listdir(gen_py_path):
+                item_path = os.path.join(gen_py_path, item)
+                # Удаляем директории с KOMPAS GUID
+                if os.path.isdir(item_path) and '0422828C' in item.upper():
+                    try:
+                        shutil.rmtree(item_path)
+                    except:
+                        pass
+    except:
+        pass
+
+
+def get_dynamic_dispatch(prog_id):
+    """Получение COM-объекта через dynamic dispatch (без использования кэша)"""
+    from win32com.client import dynamic
+    return dynamic.Dispatch(prog_id)
 
 class BaseKompasComponent:
     """Базовый класс для всех компонентов КОМПАС-3D"""
@@ -27,6 +52,9 @@ class BaseKompasComponent:
         try:
             # Если требуется переподключение или еще не подключались
             if force_reconnect or not self.connected:
+                # Очищаем кэш win32com для устранения ошибок CLSIDToClassMap
+                clear_kompas_cache()
+                
                 # Инициализируем COM (безопасно вызывать повторно)
                 try:
                     pythoncom.CoInitialize()
@@ -35,13 +63,13 @@ class BaseKompasComponent:
                 
                 self.logger.info("Подключение к КОМПАС-3D v7...")
                 
-                # Пытаемся получить уже запущенный экземпляр
+                # Используем dynamic dispatch для обхода проблем с кэшем
                 try:
-                    self.application = Dispatch("Kompas.Application.7")
+                    self.application = get_dynamic_dispatch("Kompas.Application.7")
                 except:
-                    # Если не получилось, создаем новый
-                    from win32com.client import DispatchEx
-                    self.application = DispatchEx("Kompas.Application.7")
+                    # Если не получилось, пробуем обычный Dispatch
+                    from win32com.client import Dispatch
+                    self.application = Dispatch("Kompas.Application.7")
                 
                 self.application.Visible = True
                 self.logger.info("Подключение к КОМПАС-3D успешно")

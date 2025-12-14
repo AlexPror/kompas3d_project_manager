@@ -5,8 +5,8 @@ import logging
 import time
 from pathlib import Path
 from typing import Dict, List
-from win32com.client import Dispatch, gencache
-from .base_component import BaseKompasComponent
+from win32com.client import gencache
+from .base_component import BaseKompasComponent, clear_kompas_cache, get_dynamic_dispatch
 
 class DrawingExporter(BaseKompasComponent):
     """Компонент для экспорта чертежей в изображения"""
@@ -129,7 +129,7 @@ class DrawingExporter(BaseKompasComponent):
                     self.logger.warning(f"Ошибка сохранения после Rebuild: {e}")
             
             # Получаем API 5 для работы с растровым форматом
-            api5_obj = Dispatch("Kompas.Application.5")
+            api5_obj = get_dynamic_dispatch("Kompas.Application.5")
             document_2d = api5_obj.ActiveDocument2D
             
             if not document_2d:
@@ -216,7 +216,7 @@ class DrawingExporter(BaseKompasComponent):
             self.logger.info("Принудительная перестройка чертежа...")
             
             # Получаем API 5
-            api5_obj = Dispatch("Kompas.Application.5")
+            api5_obj = get_dynamic_dispatch("Kompas.Application.5")
             document_2d = api5_obj.ActiveDocument2D
             
             if document_2d and hasattr(document_2d, 'ksRebuildDocument'):
@@ -238,7 +238,7 @@ class DrawingExporter(BaseKompasComponent):
             self.logger.info("Удаление watermark...")
             
             # Получаем API 5
-            api5_obj = Dispatch("Kompas.Application.5")
+            api5_obj = get_dynamic_dispatch("Kompas.Application.5")
             document_2d = api5_obj.ActiveDocument2D
             
             if not document_2d:
@@ -360,7 +360,7 @@ class DrawingExporter(BaseKompasComponent):
                 self.logger.warning("Не удалось перестроить чертеж")
             
             # Получаем API 5 для SaveAs
-            api5_obj = Dispatch("Kompas.Application.5")
+            api5_obj = get_dynamic_dispatch("Kompas.Application.5")
             document_2d = api5_obj.ActiveDocument2D
             
             if not document_2d:
@@ -371,13 +371,8 @@ class DrawingExporter(BaseKompasComponent):
             try:
                 self.logger.info("Сохранение в PDF через Converter...")
                 
-                # Получаем API 7 для доступа к Converter
-                from win32com.client import gencache
-                try:
-                    kompas_api7 = gencache.EnsureDispatch("Kompas.Application.7")
-                except:
-                    from win32com.client import dynamic
-                    kompas_api7 = dynamic.Dispatch("Kompas.Application.7")
+                # Получаем API 7 для доступа к Converter (используем dynamic dispatch)
+                kompas_api7 = get_dynamic_dispatch("Kompas.Application.7")
                 
                 # Путь к Pdf2d.dll (обычно в папке Bin КОМПАСа)
                 # Пытаемся найти КОМПАС в стандартных местах

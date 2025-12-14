@@ -8,8 +8,8 @@
 import logging
 from pathlib import Path
 from typing import Dict, List
-from win32com.client import Dispatch, gencache
-from .base_component import BaseKompasComponent
+from win32com.client import gencache
+from .base_component import BaseKompasComponent, clear_kompas_cache, get_dynamic_dispatch
 import time
 
 class DesignationUpdaterFixed(BaseKompasComponent):
@@ -80,13 +80,28 @@ class DesignationUpdaterFixed(BaseKompasComponent):
             self.logger.info(f"Определен тип проекта: {project_prefix}")
             
             # Формируем обозначения
-            full_name = f"{project_prefix}.{H}.{B1}.{L1} СБ"  # Сборка всегда с СБ
+            # Для marking сборки (с " СБ")
+            full_name_with_sb = f"{project_prefix}.{H}.{B1}.{L1} СБ"
+            # Для использования в обозначениях деталей (БЕЗ " СБ")
+            full_name = f"{project_prefix}.{H}.{B1}.{L1}"
             short_name = f"{project_prefix}.{H}.{B1}"
             
-            # Получаем API
-            api5_obj = Dispatch("Kompas.Application.5")
-            api7_obj = Dispatch("Kompas.Application.7")
-            kompas6_constants_3d = gencache.EnsureModule("{2CAF168C-7961-4B90-9DA2-701419BEEFE3}", 0, 1, 0).constants
+            # Очистка кэша для устранения ошибок CLSIDToClassMap
+            clear_kompas_cache()
+            
+            # Получаем API через dynamic dispatch
+            api5_obj = get_dynamic_dispatch("Kompas.Application.5")
+            api7_obj = get_dynamic_dispatch("Kompas.Application.7")
+            
+            # Загружаем константы (может потребовать кэша, обернем в try)
+            try:
+                kompas6_constants_3d = gencache.EnsureModule("{2CAF168C-7961-4B90-9DA2-701419BEEFE3}", 0, 1, 0).constants
+            except Exception:
+                # Если не удалось загрузить константы, создадим заглушку
+                class Constants3D:
+                    ksD3TextPropertyProduct = 1
+                    ksD3TextPropertyName = 2
+                kompas6_constants_3d = Constants3D()
             
             # ШАГ 1: ПЕРЕИМЕНОВАНИЕ СБОРКИ
             self.logger.info("\n--- ПЕРЕИМЕНОВАНИЕ СБОРКИ ---")
@@ -124,7 +139,8 @@ class DesignationUpdaterFixed(BaseKompasComponent):
                 iPart_asm = iDocument3D_asm.GetPart(kompas6_constants_3d.pTop_Part)
                 
                 old_asm = iPart_asm.marking
-                iPart_asm.marking = full_name
+                # Используем вариант С " СБ" для marking сборки
+                iPart_asm.marking = full_name_with_sb
                 
                 # REBUILD!
                 iPart_asm.Update()
@@ -141,7 +157,7 @@ class DesignationUpdaterFixed(BaseKompasComponent):
                 active_doc_asm.Close(True)
                 time.sleep(2)
                 
-                self.logger.info(f"✓ Сборка: '{old_asm}' → '{full_name}'")
+                self.logger.info(f"✓ Сборка: '{old_asm}' → '{full_name_with_sb}'")
                 result['assembly_renamed'] = True
                 
             except Exception as e:
@@ -239,6 +255,7 @@ class DesignationUpdaterFixed(BaseKompasComponent):
                                 # Для покупных компонентов не меняем базовое обозначение
                                 new_mark = old_mark  # Оставляем как есть
                             elif "короба" in p_name.lower():
+                                # Корпус короба - используем full_name БЕЗ " СБ"
                                 new_mark = f"{full_name}.{part_id}"
                             else:
                                 new_mark = f"{short_name}.{part_id}"
@@ -444,13 +461,13 @@ class DesignationUpdaterFixed(BaseKompasComponent):
                     is_assembly_drawing = any(word in old_name.lower() for word in ["конвектор", "сборочный", "сборка"])
                     
                     if is_assembly_drawing:
-                        # Сборочный чертеж - используем full_name (с L1)
+                        # Сборочный чертеж - используем full_name_with_sb (с " СБ")
                         if " - " in old_name:
                             name_parts = old_name.split(" - ", 1)
                             description = name_parts[1]
-                            new_drawing_name = f"{full_name} - {description}"
+                            new_drawing_name = f"{full_name_with_sb} - {description}"
                         else:
-                            new_drawing_name = f"{full_name} - {old_name}"
+                            new_drawing_name = f"{full_name_with_sb} - {old_name}"
                     else:
                         # Чертеж детали - используем short_name (без L1)
                         # Пытаемся извлечь номер детали из имени файла

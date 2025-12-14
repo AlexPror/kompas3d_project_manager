@@ -227,3 +227,5 @@ is_purchased = any(word in name.lower() for word in purchased_keywords)
 
 
 
+
+

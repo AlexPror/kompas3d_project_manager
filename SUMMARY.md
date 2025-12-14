@@ -333,3 +333,5 @@ python project_template_analyzer.py "путь/к/проекту"
 
 
 
+
+

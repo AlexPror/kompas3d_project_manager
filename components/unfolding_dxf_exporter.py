@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List
 import time
-from .base_component import BaseKompasComponent
+from .base_component import BaseKompasComponent, get_dynamic_dispatch
 
 class UnfoldingDxfExporter(BaseKompasComponent):
     """Компонент для экспорта чертежей-разверток в DXF формат"""
@@ -71,8 +71,7 @@ class UnfoldingDxfExporter(BaseKompasComponent):
             # КРИТИЧНО: Обновляем чертеж перед экспортом
             self.logger.info("Обновление чертежа...")
             
-            from win32com.client import Dispatch
-            api5 = Dispatch("Kompas.Application.5")
+            api5 = get_dynamic_dispatch("Kompas.Application.5")
             doc2d = api5.ActiveDocument2D
             
             if doc2d:
@@ -92,8 +91,7 @@ class UnfoldingDxfExporter(BaseKompasComponent):
             self.logger.info("Сохранение в DXF...")
             
             # Получаем Document2D для использования ksSaveToDXF
-            from win32com.client import Dispatch
-            api5 = Dispatch("Kompas.Application.5")
+            api5 = get_dynamic_dispatch("Kompas.Application.5")
             doc2d = api5.ActiveDocument2D
             
             if not doc2d:

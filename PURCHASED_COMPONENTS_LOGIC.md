@@ -221,3 +221,5 @@ is_purchased = any(word in name.lower() for word in ["теплообменник
 
 
 
+
+

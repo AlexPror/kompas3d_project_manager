@@ -8,8 +8,7 @@ import time
 import pythoncom
 from pathlib import Path
 from typing import Dict
-from win32com.client import Dispatch, dynamic
-from .base_component import BaseKompasComponent
+from .base_component import BaseKompasComponent, get_dynamic_dispatch
 
 class DrawingAutoUpdater(BaseKompasComponent):
     """Автоматическое открытие, пересборка и сохранение всех чертежей"""
@@ -19,7 +18,7 @@ class DrawingAutoUpdater(BaseKompasComponent):
     
     def update_all_drawings(self, project_path: str, developer: str = None, checker: str = None, organization: str = None, material: str = None, 
                           tech_control: str = None, norm_control: str = None, approved: str = None, date: str = None,
-                          check_cancel=None) -> Dict:
+                          order_number: str = None, check_cancel=None) -> Dict:
         """
         Автоматическое обновление всех чертежей в проекте
         
@@ -33,6 +32,7 @@ class DrawingAutoUpdater(BaseKompasComponent):
             norm_control: Н. контр. (ячейка 114)
             approved: Утв. (ячейка 115)
             date: Дата (ячейки 130-135)
+            order_number: Номер заказа (обновляется в наименовании детали)
             check_cancel: Функция проверки отмены (возвращает True если нужно прервать)
             
         Returns:
@@ -69,12 +69,8 @@ class DrawingAutoUpdater(BaseKompasComponent):
             
             self.logger.info(f"\nНайдено чертежей: {len(all_drawings)}\n")
             
-            # Используем dynamic.Dispatch для обхода проблем с типами (gencache)
-            try:
-                api7 = dynamic.Dispatch("Kompas.Application.7")
-            except Exception as e:
-                self.logger.warning(f"Ошибка dynamic.Dispatch: {e}")
-                api7 = Dispatch("Kompas.Application.7")
+            # Используем dynamic dispatch для обхода проблем с кэшем типов
+            api7 = get_dynamic_dispatch("Kompas.Application.7")
             
             for drawing in all_drawings:
                 # ПРОВЕРКА ОТМЕНЫ
@@ -94,11 +90,41 @@ class DrawingAutoUpdater(BaseKompasComponent):
                         result['drawings_failed'] += 1
                         continue
                     
+                    # ВАЖНО: Даем время на открытие документа
+                    time.sleep(2)
+                    
                     # Получаем интерфейс 2D документа
                     kompas_document_2d = api7.ActiveDocument
                     
+                    # ПРОВЕРКА: Пропускаем развертки (они обновляют только геометрию)
+                    is_unfolding = "развертка" in drawing.name.lower() or "razvertka" in drawing.name.lower()
+                    
+                    if is_unfolding:
+                        self.logger.info(f"  ℹ️ Развертка - пропуск обновления штампа и наименования")
+                        self.logger.info(f"  Обновление только геометрии...")
+                        
+                        # Только пересборка для обновления геометрии
+                        try:
+                            kompas_document_2d.RebuildDocument()
+                        except:
+                            pass
+                        time.sleep(2)
+                        
+                        # Сохраняем
+                        api7.ActiveDocument.Save()
+                        time.sleep(1)
+                        
+                        # Закрываем
+                        api7.ActiveDocument.Close(False)
+                        time.sleep(0.5)
+                        
+                        result['drawings_updated'] += 1
+                        result['updated_files'].append(drawing.name)
+                        self.logger.info(f"  ✓ Геометрия обновлена\n")
+                        continue  # Переходим к следующему чертежу
+                    
                     # ОБНОВЛЕНИЕ ШТАМПА (API7)
-                    if any([developer, checker, organization, material, tech_control, norm_control, approved, date]):
+                    if any([developer, checker, organization, material, tech_control, norm_control, approved, date, order_number]):
                         try:
                             self.logger.info(f"  Обновление штампа (API7)...")
                             
@@ -151,6 +177,9 @@ class DrawingAutoUpdater(BaseKompasComponent):
                                 # Обновляем сам штамп
                                 stamp.Update()
                                 
+                                # КРИТИЧНО: Даем время на обновление штампа!
+                                time.sleep(2)
+                                
                                 if date_cells_updated:
                                     self.logger.info(f"  📅 Дата '{date}' установлена для: {', '.join(date_cells_updated)}")
                                 self.logger.info(f"  ✓ Штамп обработан")
@@ -159,6 +188,52 @@ class DrawingAutoUpdater(BaseKompasComponent):
                                 
                         except Exception as e:
                             self.logger.warning(f"  ⚠️ Общая ошибка штампа: {e}")
+                    
+                    # ОБНОВЛЕНИЕ НОМЕРА ЗАКАЗА В НАИМЕНОВАНИИ ДЕТАЛИ
+                    if order_number:
+                        try:
+                            self.logger.info(f"  Обновление номера заказа в наименовании...")
+                            
+                            # Получаем спецификацию
+                            specifications = kompas_document_2d.Specifications
+                            if specifications and specifications.Count > 0:
+                                spec = specifications.Item(0)
+                                
+                                # Получаем объекты спецификации
+                                spec_objects = spec.Objects
+                                
+                                # Проходим по всем объектам
+                                for i in range(spec_objects.Count):
+                                    spec_obj = spec_objects.Item(i)
+                                    
+                                    # Получаем описание объекта
+                                    obj_description = spec_obj.Description
+                                    
+                                    if obj_description:
+                                        old_name = obj_description
+                                        
+                                        # Убираем старый номер заказа (в скобках в конце)
+                                        import re
+                                        clean_name = re.sub(r'\s*\([^)]*\)\s*$', '', old_name).strip()
+                                        
+                                        # Добавляем новый номер заказа
+                                        new_name = f"{clean_name} ({order_number})"
+                                        
+                                        # Обновляем
+                                        spec_obj.Description = new_name
+                                        spec_obj.Update()
+                                        
+                                        self.logger.info(f"    Наименование: '{clean_name}' → '{new_name}'")
+                                
+                                # Обновляем спецификацию
+                                spec.Update()
+                                self.logger.info(f"  ✓ Номер заказа обновлен")
+                            else:
+                                self.logger.info(f"  ℹ️ Спецификация не найдена (пропуск обновления номера заказа)")
+                        
+                        except Exception as e:
+                            # Спецификация отсутствует - это нормально для большинства чертежей
+                            self.logger.info(f"  ℹ️ Спецификация не найдена (номер заказа обновляется в 3D-модели)")
                     
                     # Определяем, это сборочный чертеж или нет
                     is_assembly = "конвектор" in drawing.name.lower() or "сборочный" in drawing.name.lower()
@@ -194,7 +269,9 @@ class DrawingAutoUpdater(BaseKompasComponent):
                     # Сохраняем
                     self.logger.info("  Сохранение...")
                     api7.ActiveDocument.Save()
-                    time.sleep(1 if is_assembly else 0.5)
+                    
+                    # КРИТИЧНО: Даем больше времени на сохранение!
+                    time.sleep(3)
                     
                     self.logger.info("  ✓ Готово")
                     

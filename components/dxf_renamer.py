@@ -3,11 +3,36 @@
 """
 
 import pythoncom
-from win32com.client import Dispatch, gencache
+from win32com.client import gencache
+from win32com.client import dynamic as win32_dynamic
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Dict
 import time
+
+
+def _clear_kompas_cache():
+    """Очистка кэша win32com для KOMPAS"""
+    try:
+        import win32com
+        gen_py_path = os.path.join(os.path.dirname(win32com.__file__), 'gen_py')
+        if os.path.exists(gen_py_path):
+            for item in os.listdir(gen_py_path):
+                item_path = os.path.join(gen_py_path, item)
+                if os.path.isdir(item_path) and '0422828C' in item.upper():
+                    try:
+                        shutil.rmtree(item_path)
+                    except:
+                        pass
+    except:
+        pass
+
+
+def _get_dispatch(prog_id):
+    """Получение COM-объекта через dynamic dispatch"""
+    return win32_dynamic.Dispatch(prog_id)
 
 
 class DxfRenamer:
@@ -31,14 +56,20 @@ class DxfRenamer:
         
         try:
             pythoncom.CoInitialize()
+            _clear_kompas_cache()
             
-            api5 = Dispatch("Kompas.Application.5")
+            api5 = _get_dispatch("Kompas.Application.5")
             api5.Visible = False
-            api7 = Dispatch("Kompas.Application.7")
+            api7 = _get_dispatch("Kompas.Application.7")
             
-            kompas_constants = gencache.EnsureModule(
-                "{2CAF168C-7961-4B90-9DA2-701419BEEFE3}", 0, 1, 0
-            ).constants
+            try:
+                kompas_constants = gencache.EnsureModule(
+                    "{2CAF168C-7961-4B90-9DA2-701419BEEFE3}", 0, 1, 0
+                ).constants
+            except:
+                class KompasConstants:
+                    ksD3TextPropertyProduct = 1
+                kompas_constants = KompasConstants()
             
             # Открываем сборку
             doc = api7.Documents.Open(assembly_path, False, True)

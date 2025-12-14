@@ -6,10 +6,36 @@
 
 import time
 import pythoncom
+import shutil
+import os
 from pathlib import Path
 from typing import Dict
-from win32com.client import Dispatch, gencache
 from .base_component import BaseKompasComponent
+
+
+def clear_win32com_cache():
+    """Очистка кэша win32com для устранения ошибок CLSIDToClassMap"""
+    try:
+        import win32com
+        gen_py_path = os.path.join(os.path.dirname(win32com.__file__), 'gen_py')
+        if os.path.exists(gen_py_path):
+            # Удаляем проблемные файлы кэша (не весь кэш, а только KOMPAS-связанные)
+            for item in os.listdir(gen_py_path):
+                item_path = os.path.join(gen_py_path, item)
+                # KOMPAS GUIDs начинаются с 0422828C или похожих
+                if os.path.isdir(item_path) and '0422828C' in item.upper():
+                    try:
+                        shutil.rmtree(item_path)
+                    except:
+                        pass
+    except Exception:
+        pass
+
+
+def get_dispatch_dynamic(prog_id):
+    """Получение COM-объекта через dynamic dispatch (без кэша)"""
+    from win32com.client import dynamic
+    return dynamic.Dispatch(prog_id)
 
 class CascadingVariablesUpdater(BaseKompasComponent):
     """Обновление переменных с каскадным копированием из сборки в детали"""
@@ -72,8 +98,12 @@ class CascadingVariablesUpdater(BaseKompasComponent):
                 result['errors'].append("Не удалось открыть сборку")
                 return result
             
-            api5 = Dispatch("Kompas.Application.5")
-            api7 = Dispatch("Kompas.Application.7")
+            # Очистка кэша win32com для устранения ошибок CLSIDToClassMap
+            clear_win32com_cache()
+            
+            # Используем dynamic dispatch для обхода проблем с кэшем
+            api5 = get_dispatch_dynamic("Kompas.Application.5")
+            api7 = get_dispatch_dynamic("Kompas.Application.7")
             
             iDocument3D = api5.ActiveDocument3D
             iPart = iDocument3D.GetPart(-1)
